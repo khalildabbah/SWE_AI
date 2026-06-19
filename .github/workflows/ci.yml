@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, khalil]
+  pull_request:
+    branches: [main, khalil]
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deterioration-detector
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: deterioration-detector/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate sample data
+        run: python scripts/generate_sample_data.py
+
+      - name: Build database (M1+M2)
+        run: python scripts/build_db.py
+
+      - name: Build risk table (M3-M6)
+        run: python scripts/build_risk.py
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Verify sample risk distribution (3 High / 3 Medium / 3 Low)
+        run: |
+          python - <<'PY'
+          import sys
+          import duckdb
+
+          con = duckdb.connect("data/processed/labs.duckdb", read_only=True)
+          dist = dict(
+              con.execute(
+                  "SELECT category, COUNT(*) FROM risk_summary GROUP BY category"
+              ).fetchall()
+          )
+          con.close()
+
+          expected = {"High": 3, "Medium": 3, "Low": 3}
+          print(f"Risk distribution: {dist}")
+          print(f"Expected:          {expected}")
+
+          if dist != expected:
+              sys.exit(
+                  f"Risk distribution mismatch: got {dist}, expected {expected}"
+              )
+          print("OK: sample build produced the expected 3 High / 3 Medium / 3 Low.")
+          PY
