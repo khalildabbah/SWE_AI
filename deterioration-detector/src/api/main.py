@@ -6,8 +6,11 @@ trajectory, and alerts to the React dashboard.
 
 Run:  uvicorn src.api.main:app --reload  (from the project root)
 """
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.storage.db import connect, admission_series
 from src.analysis.risk_score import LabState, score_admission
@@ -98,3 +101,12 @@ def admission_detail(subject_id: int, hadm_id: int):
         "trajectory": compute_trajectory(series),
         "labs": lab_series,
     }
+
+
+# Serve the built React dashboard from the same origin as the API.
+# Mounted LAST so it never shadows the /api/* routes above. `html=True` makes
+# StaticFiles fall back to index.html, so client-side routing / deep links work.
+# Guarded so local dev (no `npm run build` yet) doesn't fail to start.
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
