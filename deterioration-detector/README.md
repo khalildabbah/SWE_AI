@@ -73,16 +73,22 @@ uvicorn src.api.main:app --reload   # API on http://localhost:8000  (docs at /do
 ```
 
 **Data:** the full MIMIC-III `LABEVENTS.csv` is **not** in this repo — it's 1.8 GB and
-credentialed/restricted (see [Data](#data)). For convenience a tiny **synthetic sample**
-is bundled at [`data/sample/LABEVENTS_sample.csv`](data/sample/LABEVENTS_sample.csv), so
+credentialed/restricted (see [Data](#data)). For convenience a **synthetic sample**
+(~90 MB, ~8.3k admissions) is bundled at
+[`data/sample/LABEVENTS_sample.csv`](data/sample/LABEVENTS_sample.csv), so
 `build_db.py` runs out-of-the-box even on a fresh clone:
 
 - If `data/raw/LABEVENTS.csv` exists → it's used (the real dataset).
-- Otherwise → the bundled sample is used automatically (9 admissions across
-  High / Medium / Low risk, designed to populate every dashboard panel).
+- Otherwise → the bundled sample is used automatically.
+
+The sample mixes **9 hand-curated showcase admissions** (a clean 3 High / 3 Medium /
+3 Low split that lights up every dashboard panel) with a large **procedural cohort**
+drawn from clinical archetypes (worsening / mild / stable / recovering), giving a
+realistic ward distribution (~50% Low / 35% Medium / 15% High).
 
 So a grader can clone the repo and run the three commands above with **no download**.
-Regenerate the sample any time with `python scripts/generate_sample_data.py`.
+Regenerate the sample any time with `python scripts/generate_sample_data.py [target_mb]`
+(default ~90 MB, kept safely under GitHub's 100 MB per-file limit).
 
 ### 2. Frontend (React)
 ```bash
@@ -121,9 +127,10 @@ pytest -q                        # M8: analysis-engine unit tests
 | | Full dataset | Bundled sample |
 |---|---|---|
 | File | `data/raw/LABEVENTS.csv` (you provide) | `data/sample/LABEVENTS_sample.csv` (in repo) |
-| Size | ~1.8 GB, 27.8M rows | ~40 KB, 432 rows |
+| Size | ~1.8 GB, 27.8M rows | ~90 MB, ~1.46M rows |
+| Admissions | 57,238 | ~8,300 (9 curated + procedural cohort) |
 | Source | MIMIC-III, **credentialed** ([PhysioNet](https://physionet.org/content/mimiciii/)) | synthetic, illustrative only |
-| In git? | No (too large + restricted license) | Yes |
+| In git? | No (too large + restricted license) | Yes (under the 100 MB file limit) |
 
 The full `LABEVENTS` table is **restricted-access MIMIC-III data** and may not be
 redistributed — each user must obtain it via their own credentialed PhysioNet access,
