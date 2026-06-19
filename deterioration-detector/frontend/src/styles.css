@@ -38,7 +38,17 @@ header.top p { margin: 0; color: var(--muted); font-size: 12px; }
 }
 .filters button.active { border-color: var(--accent); color: var(--accent); }
 
+.controls { display: flex; gap: 6px; padding: 0 20px 12px; }
+.controls .search { flex: 2; min-width: 0; }
+.controls .sort { flex: 1; }
+.controls input, .controls select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.controls input:focus, .controls select:focus { outline: none; border-color: var(--accent); }
+
 .list { overflow-y: auto; flex: 1; }
+.warn { color: var(--high); margin-right: 4px; }
 .row {
   display: grid; grid-template-columns: 1fr auto; gap: 4px; padding: 10px 20px;
   border-bottom: 1px solid var(--border); cursor: pointer;
@@ -63,7 +73,44 @@ header.top p { margin: 0; color: var(--muted); font-size: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; }
 .dot.high { background: var(--high); } .dot.medium { background: var(--medium); }
 
+/* Hover tooltip for plain-English explanations of medical terms. */
+.tip { position: relative; border-bottom: 1px dotted var(--muted); cursor: help; }
+.tipbox {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 100;
+  width: max-content; max-width: 260px;
+  background: #0b1117; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+  font-size: 12px; line-height: 1.45; font-weight: 400;
+  text-transform: none; letter-spacing: 0; text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .12s ease, transform .12s ease; pointer-events: none;
+}
+.tip:hover .tipbox, .tip:focus .tipbox, .tip:focus-within .tipbox {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
+
 .labgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 .lab { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .lab .t { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.lab .lstatus { font-weight: 700; }
 .placeholder { color: var(--muted); text-align: center; margin-top: 80px; }
+.placeholder.small { margin-top: 24px; font-size: 13px; padding: 0 20px; }
+.placeholder.err { color: var(--high); }
+
+/* "Why this score?" per-lab risk breakdown. */
+.breakdown { display: flex; flex-direction: column; gap: 6px; }
+.brow {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: 10px 1.4fr auto auto 1fr auto;
+  font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--bg);
+}
+.brow .bname { font-weight: 600; }
+.brow .bval { color: var(--muted); font-variant-numeric: tabular-nums; }
+.brow .bstatus { font-weight: 700; }
+.brow .btrend { font-size: 12px; text-align: right; }
+.brow .bpts {
+  font-weight: 700; font-variant-numeric: tabular-nums;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1px 8px; font-size: 12px;
+}

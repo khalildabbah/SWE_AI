@@ -159,6 +159,30 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 
 ---
 
+## 🖥️ Using the Dashboard
+
+- **Opens ready to read.** The dashboard auto-selects the highest-risk patient on load, so the detail pane is never empty — no "pick a patient" dead end.
+- **Triage board (left).** Admissions are ranked by risk score. Use the **High / Medium / Low / All** filter to switch cohorts; the top patient of each cohort loads automatically.
+- **Built-in glossary — hover anything.** Because this audience isn't clinical, every term explains itself on hover: lab names, the risk score, the High/Medium/Low badges, the `critical` / `worsening` counts, and the pipeline stats. A **dotted underline** marks anything you can hover.
+- **Detail pane (right), top to bottom:** the overall **risk score + category**, the **risk trajectory** across the stay, auto-generated **early-warning alerts**, and each **lab plotted over time** with a green band marking the normal range.
+
+### The 8 core labs (plain English)
+
+| Lab | Normal range | What it tells you |
+|-----|--------------|-------------------|
+| Creatinine | 0.6–1.2 mg/dL | Kidney waste product; rising = kidneys not filtering well. |
+| Urea Nitrogen (BUN) | 7–20 mg/dL | Protein-breakdown waste; high = kidney stress or dehydration. |
+| Potassium | 3.5–5.0 mEq/L | Heart/muscle electrolyte; too high or low risks dangerous heart rhythms. |
+| Sodium | 135–145 mEq/L | Controls water balance; abnormal levels affect brain and nerves. |
+| Bicarbonate | 22–29 mEq/L | Blood acid balance; low = blood turning too acidic (distress). |
+| White Blood Cells | 4–11 K/µL | Infection-fighting cells; high signals infection, very low weakens immunity. |
+| Hematocrit | 36–48 % | Share of blood that is red cells; low = anemia/blood loss. |
+| Lactate | 0.5–2.0 mmol/L | Builds up when tissues lack oxygen; rising = key warning of shock. |
+
+> Reference ranges are generic adult values from [`lab_dictionary.py`](deterioration-detector/src/ingestion/lab_dictionary.py), for this educational prototype only — **not** clinical advice.
+
+---
+
 ## 📊 Current Project Status
 
 ✅ **Working prototype (Phase B)**
