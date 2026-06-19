@@ -49,7 +49,9 @@ def score_admission(states: list[LabState]) -> RiskResult:
         sev_pts = points(st.itemid, st.latest_value)
         status = classify(st.itemid, st.latest_value)
         tr = trend(st.itemid, st.series)
-        trend_pts = 1 if tr == WORSENING else 0
+        # a worsening trend only adds risk once the value is already out of range,
+        # so small in-range fluctuations don't inflate the score
+        trend_pts = 1 if (tr == WORSENING and status != "normal") else 0
         lab_total = sev_pts + trend_pts
         score += lab_total
         contributions.append({
