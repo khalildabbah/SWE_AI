@@ -5,6 +5,10 @@ LABEVENTS.csv
 deterioration-detector/data/raw/
 deterioration-detector/data/processed/
 
+# ...but DO commit the small synthetic sample so the project runs without MIMIC
+!deterioration-detector/data/sample/
+!deterioration-detector/data/sample/*.csv
+
 # Python
 .venv/
 venv/

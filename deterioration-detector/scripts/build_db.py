@@ -20,12 +20,25 @@ sys.path.insert(0, str(ROOT))
 from src.ingestion.lab_dictionary import LAB_DEFS, CORE_ITEMIDS  # noqa: E402
 
 RAW_CSV = ROOT / "data" / "raw" / "LABEVENTS.csv"
+SAMPLE_CSV = ROOT / "data" / "sample" / "LABEVENTS_sample.csv"
 OUT_DB = ROOT / "data" / "processed" / "labs.duckdb"
 
 
+def resolve_csv() -> Path:
+    """Use the full MIMIC dump if present, otherwise fall back to the bundled
+    sample so a fresh clone runs end-to-end without the credentialed download."""
+    if RAW_CSV.exists():
+        print(f"[0/4] Using full dataset: {RAW_CSV}")
+        return RAW_CSV
+    if SAMPLE_CSV.exists():
+        print(f"[0/4] Full dataset not found -> using bundled SAMPLE: {SAMPLE_CSV}")
+        print("      (regenerate with scripts/generate_sample_data.py)")
+        return SAMPLE_CSV
+    sys.exit(f"No data found. Expected {RAW_CSV} or {SAMPLE_CSV}")
+
+
 def main() -> None:
-    if not RAW_CSV.exists():
-        sys.exit(f"Raw CSV not found at {RAW_CSV}")
+    csv_path = resolve_csv()
 
     OUT_DB.parent.mkdir(parents=True, exist_ok=True)
     if OUT_DB.exists():
@@ -47,7 +60,7 @@ def main() -> None:
     )
 
     idlist = ",".join(str(i) for i in CORE_ITEMIDS)
-    print(f"[1/4] Streaming + filtering 27.8M rows to {len(CORE_ITEMIDS)} core labs ...")
+    print(f"[1/4] Streaming + filtering rows to {len(CORE_ITEMIDS)} core labs ...")
 
     # M1 read raw (streamed) + M2 clean, all pushed down into DuckDB:
     #   - keep only core labs
@@ -64,7 +77,7 @@ def main() -> None:
             r.VALUENUM::DOUBLE             AS value,
             d.unit                         AS unit,
             r.FLAG                         AS flag
-        FROM read_csv_auto('{RAW_CSV.as_posix()}', header=true) r
+        FROM read_csv_auto('{csv_path.as_posix()}', header=true) r
         JOIN lab_def d ON d.itemid = r.ITEMID::INTEGER
         WHERE r.ITEMID IN ({idlist})
           AND r.VALUENUM IS NOT NULL
@@ -101,7 +114,7 @@ def main() -> None:
 
     # --- report ---
     raw_rows = con.execute(
-        f"SELECT COUNT(*) FROM read_csv_auto('{RAW_CSV.as_posix()}', header=true)"
+        f"SELECT COUNT(*) FROM read_csv_auto('{csv_path.as_posix()}', header=true)"
     ).fetchone()[0]
     kept = con.execute("SELECT COUNT(*) FROM labs_clean").fetchone()[0]
     n_pat = con.execute("SELECT COUNT(DISTINCT subject_id) FROM labs_clean").fetchone()[0]
