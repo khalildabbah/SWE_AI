@@ -1,0 +1,14 @@
+# data (large / generated)
+data/raw/*.csv
+data/raw/*.xlsx
+data/processed/*.duckdb
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# node
+frontend/node_modules/
+frontend/dist/
