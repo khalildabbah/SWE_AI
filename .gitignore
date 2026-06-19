@@ -1,0 +1,19 @@
+# Large raw data (exceeds GitHub 100MB limit)
+LABEVENTS.csv
+*.csv
+*.duckdb
+deterioration-detector/data/raw/
+deterioration-detector/data/processed/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
