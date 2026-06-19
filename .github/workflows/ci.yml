@@ -38,7 +38,7 @@ jobs:
       - name: Run tests
         run: pytest -q
 
-      - name: Verify sample risk distribution (3 High / 3 Medium / 3 Low)
+      - name: Verify sample risk distribution
         run: |
           python - <<'PY'
           import sys
@@ -50,15 +50,30 @@ jobs:
                   "SELECT category, COUNT(*) FROM risk_summary GROUP BY category"
               ).fetchall()
           )
+          # the 9 curated showcase admissions (subject ids 10001-10009) must always
+          # land 3 High / 3 Medium / 3 Low, independent of the procedural cohort.
+          curated = dict(
+              con.execute(
+                  "SELECT category, COUNT(*) FROM risk_summary "
+                  "WHERE subject_id BETWEEN 10001 AND 10009 GROUP BY category"
+              ).fetchall()
+          )
           con.close()
 
-          expected = {"High": 3, "Medium": 3, "Low": 3}
-          print(f"Risk distribution: {dist}")
-          print(f"Expected:          {expected}")
+          total = sum(dist.values())
+          print(f"Risk distribution: {dist}  (total {total})")
+          print(f"Curated 9:         {curated}")
 
-          if dist != expected:
-              sys.exit(
-                  f"Risk distribution mismatch: got {dist}, expected {expected}"
-              )
-          print("OK: sample build produced the expected 3 High / 3 Medium / 3 Low.")
+          errors = []
+          for cat in ("High", "Medium", "Low"):
+              if dist.get(cat, 0) < 1:
+                  errors.append(f"category {cat!r} is empty")
+          if total < 1000:
+              errors.append(f"expected a large procedural cohort, got only {total} admissions")
+          if curated != {"High": 3, "Medium": 3, "Low": 3}:
+              errors.append(f"curated showcase cohort mismatch: {curated}")
+
+          if errors:
+              sys.exit("Sample distribution check failed: " + "; ".join(errors))
+          print("OK: all three risk tiers populated and curated 9 = 3 High / 3 Medium / 3 Low.")
           PY

@@ -1,0 +1,12 @@
+# Render Blueprint — connect this repo to Render and it deploys as a single
+# Docker web service (FastAPI serves the React dashboard + the /api routes).
+services:
+  - type: web
+    name: deterioration-detector
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    healthCheckPath: /api/stats
+    autoDeploy: true

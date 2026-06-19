@@ -45,7 +45,7 @@ This project uses the **MIMIC-III** clinical database, specifically the `LABEVEN
 | `CHARTTIME`   | Timestamp when the measurement was recorded.                       |
 | `VALUENUM`    | Numeric value of the laboratory measurement.                       |
 
-> **Note on data access:** MIMIC-III is a restricted-access dataset. Use of the data requires completion of the required training and a signed data use agreement via [PhysioNet](https://physionet.org/content/mimiciii/). **No patient data is included in this repository.**
+> **Note on data access:** MIMIC-III is a restricted-access dataset. Use of the data requires completion of the required training and a signed data use agreement via [PhysioNet](https://physionet.org/content/mimiciii/). **No real patient data is included in this repository.** For convenience, a ~90 MB **fully synthetic** sample (`deterioration-detector/data/sample/LABEVENTS_sample.csv`) is bundled so the system runs end-to-end on a fresh clone with no download — see [Running the Prototype](#-running-the-prototype).
 
 ---
 
@@ -122,42 +122,64 @@ The system follows a **pipeline architecture**: data flows from ingestion throug
 
 ## 🛠️ Technology Stack
 
-| Layer                  | Proposed Technology                          |
+| Layer                  | Technology                                   |
 |------------------------|----------------------------------------------|
 | Language               | Python                                       |
-| Data processing        | pandas, NumPy                                |
-| Analysis / modeling    | scikit-learn, SciPy                          |
-| Visualization / UI     | Streamlit / Dash (dashboard), Plotly / Matplotlib |
-| Data storage           | CSV / SQLite (MIMIC-III subset)              |
-| Version control        | Git & GitHub                                 |
+| Ingestion / storage    | **DuckDB** (streams the 1.8 GB CSV, no full RAM load) |
+| Analysis engine        | Pure Python (`src/analysis`), unit-tested with **pytest** |
+| API                    | **FastAPI** + uvicorn                        |
+| Dashboard / UI         | **React** (Vite) + **Recharts**              |
+| Version control / CI   | Git & GitHub + GitHub Actions                |
 
-> _The technology stack is provisional and may evolve as the project develops._
+---
+
+## 🚀 Running the Prototype
+
+The working prototype lives in [`deterioration-detector/`](deterioration-detector/)
+(full details in its [README](deterioration-detector/README.md)). It runs on a fresh
+clone with **no MIMIC download** — `build_db.py` auto-falls back to the bundled
+synthetic sample when the real dataset is absent.
+
+```bash
+cd deterioration-detector
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+python scripts/build_db.py      # M1+M2: builds clean labs.duckdb (uses sample if no real CSV)
+python scripts/build_risk.py    # M3-M6: scores every admission
+uvicorn src.api.main:app --reload   # API on http://localhost:8000
+
+# in a second terminal, for the dashboard:
+cd frontend && npm install && npm run dev   # http://localhost:5173
+```
+
+> **You only see data after the build steps run** — the database itself is not
+> committed (it's generated). Drop the real `data/raw/LABEVENTS.csv` in place first
+> to run against MIMIC-III instead of the synthetic sample.
 
 ---
 
 ## 📊 Current Project Status
 
-🚧 **Planning / Early Development**
+✅ **Working prototype (Phase B)**
 
 - [x] Defined research question and project scope
 - [x] Identified dataset and key input fields
 - [x] Drafted system architecture and components
-- [ ] Set up data access and ingestion pipeline
-- [ ] Implement trend analysis & abnormality detection
-- [ ] Implement risk scoring & alert engine
-- [ ] Build dashboard visualization
-- [ ] Testing, evaluation & documentation
+- [x] Set up data access and ingestion pipeline (DuckDB streaming)
+- [x] Implement trend analysis & abnormality detection
+- [x] Implement risk scoring & alert engine
+- [x] Build dashboard visualization (FastAPI + React)
+- [x] Testing & CI (pytest suite + GitHub Actions running the sample pipeline)
 
 ---
 
 ## 🔜 Next Steps
 
-1. Obtain access to the MIMIC-III dataset and prepare a working subset.
-2. Build the data ingestion and preprocessing pipeline.
-3. Define and prototype trend-detection logic for selected lab tests.
-4. Develop the risk-scoring model and alerting thresholds.
-5. Implement the dashboard for visualizing trends, alerts, and scores.
-6. Evaluate the system and document findings.
+1. Tune risk thresholds and add ICU-specific reference ranges.
+2. Expand beyond the 8 core labs and add vitals where available.
+3. Explore a learned risk model behind the existing `score_admission()` interface.
+4. Add per-admission evaluation against outcomes and document findings.
 
 ---
 
