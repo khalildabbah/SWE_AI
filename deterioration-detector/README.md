@@ -1,5 +1,7 @@
 # Patient Deterioration Detector
 
+[![CI](https://github.com/khalildabbah/SWE_AI/actions/workflows/ci.yml/badge.svg)](https://github.com/khalildabbah/SWE_AI/actions/workflows/ci.yml)
+
 A software system that ingests hospital laboratory data (MIMIC-III `LABEVENTS`),
 analyses lab **trends over time**, detects abnormal values and worsening patterns,
 computes a per-patient **risk score**, and raises **early-warning alerts** — shown
