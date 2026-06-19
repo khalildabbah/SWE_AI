@@ -64,12 +64,23 @@ behind the same `score_admission()` interface.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# place the dataset at data/raw/LABEVENTS.csv (or symlink it)
-python scripts/build_db.py      # M1+M2: 27.8M rows -> clean labs.duckdb (~7s)
-python scripts/build_risk.py    # M3-M6: score all 57k admissions (~8s)
+python scripts/build_db.py      # M1+M2: builds clean labs.duckdb
+python scripts/build_risk.py    # M3-M6: scores every admission
 
 uvicorn src.api.main:app --reload   # API on http://localhost:8000  (docs at /docs)
 ```
+
+**Data:** the full MIMIC-III `LABEVENTS.csv` is **not** in this repo — it's 1.8 GB and
+credentialed/restricted (see [Data](#data)). For convenience a tiny **synthetic sample**
+is bundled at [`data/sample/LABEVENTS_sample.csv`](data/sample/LABEVENTS_sample.csv), so
+`build_db.py` runs out-of-the-box even on a fresh clone:
+
+- If `data/raw/LABEVENTS.csv` exists → it's used (the real dataset).
+- Otherwise → the bundled sample is used automatically (9 admissions across
+  High / Medium / Low risk, designed to populate every dashboard panel).
+
+So a grader can clone the repo and run the three commands above with **no download**.
+Regenerate the sample any time with `python scripts/generate_sample_data.py`.
 
 ### 2. Frontend (React)
 ```bash
@@ -102,6 +113,21 @@ pytest -q                        # M8: analysis-engine unit tests
 | GET | `/api/stats` | pipeline scale story + risk distribution |
 | GET | `/api/admissions?category=High` | triage board, ranked by risk |
 | GET | `/api/admissions/{subject_id}/{hadm_id}` | timelines, risk, trajectory, alerts |
+
+## Data
+
+| | Full dataset | Bundled sample |
+|---|---|---|
+| File | `data/raw/LABEVENTS.csv` (you provide) | `data/sample/LABEVENTS_sample.csv` (in repo) |
+| Size | ~1.8 GB, 27.8M rows | ~40 KB, 432 rows |
+| Source | MIMIC-III, **credentialed** ([PhysioNet](https://physionet.org/content/mimiciii/)) | synthetic, illustrative only |
+| In git? | No (too large + restricted license) | Yes |
+
+The full `LABEVENTS` table is **restricted-access MIMIC-III data** and may not be
+redistributed — each user must obtain it via their own credentialed PhysioNet access,
+then drop it at `data/raw/LABEVENTS.csv` and re-run the build scripts. The bundled
+sample is fully synthetic (not real patient data) and exists only so the project runs
+end-to-end without that download.
 
 ## Known limitations (Phase B)
 

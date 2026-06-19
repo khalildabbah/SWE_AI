@@ -40,7 +40,7 @@ def main() -> None:
             FROM labs_clean
         )
         WHERE rn <= {WINDOW}
-        ORDER BY subject_id, hadm_id, itemid, value
+        ORDER BY subject_id, hadm_id, itemid, charttime
     """).fetchall()
 
     # group -> series per (admission, lab)
