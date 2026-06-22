@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceArea, Area, AreaChart, CartesianGrid,
+  ReferenceArea, ReferenceLine, Area, AreaChart, CartesianGrid,
 } from "recharts";
 
 // Clinical palette (mirrors styles.css tokens) for chart strokes/fills.
@@ -51,9 +51,21 @@ const TIPS = {
   labs: "Number of individual lab test results recorded for this admission.",
   span: "Hours between the patient's first and last lab measurement.",
   badge: "Risk category and score. Higher score = more concern; High patients need attention first.",
+  syndromes: "Named clinical patterns detected when several labs move together — e.g. creatinine and urea both rising points at the kidneys. More telling than any single lab alone.",
+  eval_accuracy: "Of all lab values, the share our detector classified (normal vs abnormal) the same way MIMIC's own flag did.",
+  eval_precision: "When our detector calls a value abnormal, how often MIMIC agreed. Low precision means we over-flag.",
+  eval_recall: "Of every value MIMIC flagged abnormal, how many our detector also caught. Also called sensitivity.",
+  eval_specificity: "Of every value MIMIC considered normal, how many our detector also called normal.",
+  eval_f1: "A single balance of precision and recall (their harmonic mean).",
+  eval_cm: "Confusion matrix: each value falls into one of four buckets comparing our call against MIMIC's flag.",
   warn: "This patient has one or more labs critically out of range.",
   search: "Filter the list by patient or admission ID.",
   sort: "Order the list by risk score, or by how much lab data each admission has.",
+  lead_time: "How many hours before the first critically out-of-range value our risk score had already escalated. The core early-warning question this project asks.",
+  lt_concern: "First concern = the first time the score left Low (reached Medium or High). The earliest hint of trouble.",
+  lt_alert: "High alert = the first time the score reached High, the top triage category.",
+  lt_rate: "Of all admissions that reached a critical lab value, the share where the score escalated strictly before that value appeared.",
+  lt_event: "Deterioration is proxied by the first critically out-of-range lab value, because this prototype ingests only LABEVENTS (no death / ICU-transfer outcomes).",
   raw_rows: "Total raw lab records read from the dataset before any cleaning.",
   kept_rows: "Records left after removing implausible or garbage values.",
   patients: "Number of distinct patients in the dataset.",
@@ -71,6 +83,7 @@ function Tip({ text, children }) {
 }
 
 export default function App() {
+  const [page, setPage] = useState("dashboard"); // "dashboard" | "monitoring"
   const [stats, setStats] = useState(null);
   const [filter, setFilter] = useState("High");
   const [sort, setSort] = useState("score");
@@ -159,8 +172,14 @@ export default function App() {
         </div>
 
         <nav className="nav">
-          <a className="active"><Icon name="dashboard" /><span>Dashboard</span></a>
-          <a><Icon name="monitor_heart" /><span>Patient Monitoring</span></a>
+          <a className={page === "dashboard" ? "active" : ""} onClick={() => setPage("dashboard")}>
+            <Icon name="dashboard" /><span>Dashboard</span></a>
+          <a className={page === "monitoring" ? "active" : ""} onClick={() => setPage("monitoring")}>
+            <Icon name="monitor_heart" /><span>Patient Monitoring</span></a>
+          <a className={page === "leadtime" ? "active" : ""} onClick={() => setPage("leadtime")}>
+            <Icon name="schedule" /><span>Early Warning</span></a>
+          <a className={page === "evaluation" ? "active" : ""} onClick={() => setPage("evaluation")}>
+            <Icon name="fact_check" /><span>Detector Accuracy</span></a>
           <a><Icon name="warning" /><span>Risk Alerts</span></a>
         </nav>
 
@@ -232,12 +251,12 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <div className="lead">
-            <span className="title">Deterioration Watch</span>
-            <nav className="tabs">
-              <span className="active">Active Cases</span>
-              <span>Risk Distribution</span>
-              <span>Unit Metrics</span>
-            </nav>
+            <span className="title">
+              {page === "monitoring" ? "Patient Monitoring"
+                : page === "evaluation" ? "Detector Accuracy"
+                : page === "leadtime" ? "Early Warning"
+                : "Deterioration Watch"}
+            </span>
           </div>
           <div className="actions">
             <div className="live"><span className="dot" />System Live</div>
@@ -248,9 +267,19 @@ export default function App() {
         </header>
 
         <div className="canvas">
-          {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
-          {!detail && !detailError && <div className="placeholder">Loading patient…</div>}
-          {detail && <Detail d={detail} meta={selected} />}
+          {page === "evaluation" ? (
+            <Evaluation />
+          ) : page === "leadtime" ? (
+            <LeadTime />
+          ) : (
+            <>
+              {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
+              {!detail && !detailError && <div className="placeholder">Loading patient…</div>}
+              {detail && (page === "monitoring"
+                ? <Monitoring d={detail} meta={selected} />
+                : <Detail d={detail} meta={selected} />)}
+            </>
+          )}
         </div>
 
         <footer className="databar">
@@ -280,6 +309,20 @@ function Detail({ d, meta }) {
   // status/trend per lab live in the risk breakdown, keyed by itemid.
   const byId = Object.fromEntries((d.risk.contributions || []).map((c) => [c.itemid, c]));
   const stroke = RISK_COLOR[cat];
+
+  // Early-warning lead time for this admission (concern = first Medium+, vs the
+  // first critical value). Reference lines are placed on the trajectory below.
+  const lt = d.lead_time || {};
+  const concernLabel = lt.concern_time ? fmtTime(lt.concern_time) : null;
+  const eventLabel = lt.event_time ? fmtTime(lt.event_time) : null;
+  const fmtH = (h) => (h >= 48 ? `${(h / 24).toFixed(1)} days` : `${h} h`);
+  const leadMsg = !lt.deteriorated
+    ? "No critically out-of-range value was reached during this stay."
+    : !lt.concerned
+      ? `A critical ${lt.event_lab} value appeared without the score escalating first.`
+      : lt.lead_concern_hours > 0
+        ? `Risk flagged concern ${fmtH(lt.lead_concern_hours)} before the first critical value (${lt.event_lab}).`
+        : `Risk escalated at the same measurement as the first critical value (${lt.event_lab}).`;
 
   // Header metric cluster — real per-admission summary (from the board row).
   const nHigh = meta?.n_high ?? (d.risk.contributions || []).filter((c) => c.status === "critical").length;
@@ -338,7 +381,14 @@ function Detail({ d, meta }) {
             <h3><Tip text={TIPS.trajectory}>Risk Trajectory Over Time</Tip></h3>
             <div className="desc">Combined deterioration index across the hospital stay</div>
           </div>
+          {lt.deteriorated && (concernLabel || eventLabel) && (
+            <div className="trajlegend">
+              {concernLabel && <span className="lg concern"><span className="swatch" />First concern</span>}
+              {eventLabel && <span className="lg event"><span className="swatch" />First critical value</span>}
+            </div>
+          )}
         </div>
+        <div className="leadcallout"><Icon name="schedule" /><Tip text={TIPS.lead_time}>{leadMsg}</Tip></div>
         <ResponsiveContainer width="100%" height={300}>
           <AreaChart data={traj} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
@@ -353,7 +403,15 @@ function Detail({ d, meta }) {
             <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6 }}
               labelStyle={{ color: "#c2c6d6" }} />
             <Area type="monotone" dataKey="score" stroke={stroke} fill="url(#g)" strokeWidth={3}
-              dot={{ r: 2, fill: stroke }} activeDot={{ r: 5 }} />
+              dot={false} activeDot={{ r: 5 }} />
+            {concernLabel && (
+              <ReferenceLine x={concernLabel} stroke="#f59e0b" strokeDasharray="3 3"
+                label={{ value: "concern", position: "insideTopLeft", fill: "#f59e0b", fontSize: 10 }} />
+            )}
+            {eventLabel && eventLabel !== concernLabel && (
+              <ReferenceLine x={eventLabel} stroke="#ef4444" strokeDasharray="3 3"
+                label={{ value: "critical", position: "insideTopRight", fill: "#ef4444", fontSize: 10 }} />
+            )}
           </AreaChart>
         </ResponsiveContainer>
       </section>
@@ -390,6 +448,305 @@ function Detail({ d, meta }) {
         </div>
         <div className="labgrid">
           {d.labs.map((lab) => <LabCard key={lab.itemid} lab={lab} info={byId[lab.itemid]} />)}
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ── Patient Monitoring page: clinical-syndrome detection + live lab vitals ──
+function Monitoring({ d, meta }) {
+  const cat = d.risk.category;
+  const byId = Object.fromEntries((d.risk.contributions || []).map((c) => [c.itemid, c]));
+  const syndromes = d.syndromes || [];
+  const nCritical = syndromes.filter((s) => s.severity === "critical").length;
+
+  return (
+    <>
+      {/* Compact patient strip */}
+      <section className={`panel monitorhead ${cat}`}>
+        <div className="who">
+          <Icon name="monitor_heart" className="ghost" />
+          <div>
+            <div className="eyebrow">Patient Monitoring</div>
+            <h2>Patient {d.subject_id}</h2>
+            <div className="adm">ADMISSION ID: {d.hadm_id}</div>
+          </div>
+        </div>
+        <div className="summary">
+          <div className="stat">
+            <span className="num">{syndromes.length}</span>
+            <span className="lbl">pattern{syndromes.length === 1 ? "" : "s"} detected</span>
+          </div>
+          <div className={`stat ${nCritical > 0 ? "crit" : ""}`}>
+            <span className="num">{nCritical}</span>
+            <span className="lbl">critical</span>
+          </div>
+          <div className="stat">
+            <span className="badge" title={TIPS.category}>{cat} Risk</span>
+            <span className="lbl">overall score {d.risk.score}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Clinical syndrome detection — the star of this page */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.syndromes}>Clinical Syndrome Detection</Tip></h3>
+            <div className="desc">Named patterns found across several labs at once — more telling than any single value</div>
+          </div>
+        </div>
+        {syndromes.length === 0 ? (
+          <div className="placeholder small synempty">
+            <Icon name="verified" />
+            No syndromic patterns detected — this patient's labs don't match a known
+            deterioration pattern.
+          </div>
+        ) : (
+          <div className="syngrid">
+            {syndromes.map((s) => <SyndromeCard key={s.key} s={s} />)}
+          </div>
+        )}
+      </section>
+
+      {/* Live lab vitals (reuses the dashboard's lab cards) */}
+      <section className="panel labpanel">
+        <div className="head">
+          <h3><Tip text={TIPS.labTrends}>Live Lab Vitals ({d.labs.length} tests)</Tip></h3>
+        </div>
+        <div className="labgrid">
+          {d.labs.map((lab) => <LabCard key={lab.itemid} lab={lab} info={byId[lab.itemid]} />)}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function SyndromeCard({ s }) {
+  const dirArrow = { high: "↑", low: "↓" };
+  return (
+    <div className={`syncard ${s.severity}`}>
+      <div className="synhead">
+        <div className="syntitle">
+          <Icon name={s.severity === "critical" ? "emergency" : "warning"} />
+          <span className="name">{s.name}</span>
+        </div>
+      </div>
+      <div className="synplain">{s.plain}</div>
+      <div className="synsignals">
+        {s.matched.map((m) => (
+          <span key={m.itemid} className={`signal ${m.status}`}
+            title={`${m.test_name} ${(+m.value).toPrecision(3) / 1} ${m.unit} — ${m.status}${m.trend === "worsening" ? ", worsening" : ""}`}>
+            {GLOSSARY[m.test_name]
+              ? <Tip text={GLOSSARY[m.test_name]}>{m.test_name}</Tip>
+              : m.test_name}
+            <span className="sv">{(+m.value).toPrecision(3) / 1}{dirArrow[m.direction] || ""}</span>
+          </span>
+        ))}
+        {s.missing.map((m) => (
+          <span key={m.itemid} className="signal absent"
+            title={`${m.test_name} would also be expected (${m.direction}) but is in range`}>
+            {m.test_name}<span className="sv">—</span>
+          </span>
+        ))}
+      </div>
+      {s.worsening && (
+        <div className="synfoot"><Icon name="trending_up" />Contributing labs are trending worse</div>
+      )}
+    </div>
+  );
+}
+
+// ── Detector Accuracy page: our reference-range detector vs MIMIC's FLAG ──
+function Evaluation() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/evaluation")
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.detail || "error"); return j; }))
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  if (error) return <div className="placeholder err">{error}</div>;
+  if (!data) return <div className="placeholder">Computing accuracy…</div>;
+
+  const o = data.overall;
+  const CARDS = [
+    ["Accuracy", o.accuracy, TIPS.eval_accuracy, "ok"],
+    ["Precision", o.precision, TIPS.eval_precision, o.precision < 80 ? "warn" : "ok"],
+    ["Recall", o.recall, TIPS.eval_recall, o.recall < 80 ? "warn" : "ok"],
+    ["Specificity", o.specificity, TIPS.eval_specificity, "ok"],
+    ["F1 Score", o.f1, TIPS.eval_f1, "ok"],
+  ];
+  const fmt = (n) => (+n).toLocaleString();
+
+  return (
+    <>
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3>Detector Accuracy vs MIMIC FLAG</h3>
+            <div className="desc">
+              How our reference-range anomaly detector agrees with MIMIC's own
+              “abnormal” flag, across {fmt(o.total)} lab values.
+            </div>
+          </div>
+        </div>
+
+        <div className="evalcards">
+          {CARDS.map(([label, val, tip, tone]) => (
+            <div key={label} className={`panel metric evalmetric ${tone}`}>
+              <div className="label"><Tip text={tip}>{label}</Tip></div>
+              <div className="val">{val}<span className="unit">%</span></div>
+            </div>
+          ))}
+        </div>
+
+        <div className="evalnote"><Icon name="info" />{data.note}</div>
+      </section>
+
+      {/* Overall confusion matrix */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.eval_cm}>Confusion Matrix</Tip></h3>
+            <div className="desc">Every lab value bucketed by our call vs MIMIC's flag</div>
+          </div>
+        </div>
+        <div className="cmatrix">
+          <div className="cmcell tp"><span className="k">True Positive</span><span className="n">{fmt(o.tp)}</span><span className="d">flagged by both</span></div>
+          <div className="cmcell fp"><span className="k">False Positive</span><span className="n">{fmt(o.fp)}</span><span className="d">we flagged, MIMIC didn't</span></div>
+          <div className="cmcell fn"><span className="k">False Negative</span><span className="n">{fmt(o.fn)}</span><span className="d">MIMIC flagged, we missed</span></div>
+          <div className="cmcell tn"><span className="k">True Negative</span><span className="n">{fmt(o.tn)}</span><span className="d">normal in both</span></div>
+        </div>
+      </section>
+
+      {/* Per-lab breakdown */}
+      <section className="panel factortable">
+        <div className="head">
+          <h3>Per-Lab Breakdown</h3>
+          <div className="note"><Icon name="science" />Where the detector agrees — and where it over-flags</div>
+        </div>
+        <div className="tablewrap">
+          <table className="factors">
+            <thead>
+              <tr>
+                <th>Lab</th>
+                <th className="r">Values</th>
+                <th className="r"><Tip text={TIPS.eval_precision}>Precision</Tip></th>
+                <th className="r"><Tip text={TIPS.eval_recall}>Recall</Tip></th>
+                <th className="r"><Tip text={TIPS.eval_accuracy}>Accuracy</Tip></th>
+                <th className="c">Agreement</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.per_lab.map((l) => (
+                <tr key={l.itemid}>
+                  <td className="name">
+                    <span className="lead">
+                      {GLOSSARY[l.test_name]
+                        ? <Tip text={GLOSSARY[l.test_name]}>{l.test_name}</Tip>
+                        : l.test_name}
+                    </span>
+                  </td>
+                  <td className="val">{fmt(l.total)}</td>
+                  <td className="val">{l.precision}%</td>
+                  <td className="val">{l.recall}%</td>
+                  <td className="val">{l.accuracy}%</td>
+                  <td className="c">
+                    <span className="agbar"><span className="fill" style={{ width: `${l.accuracy}%` }} /></span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ── Early Warning page: how far ahead the score escalates vs the first critical value ──
+function LeadTime() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/lead-time")
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.detail || "error"); return j; }))
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  if (error) return <div className="placeholder err">{error}</div>;
+  if (!data) return <div className="placeholder">Computing lead time…</div>;
+
+  const fmt = (n) => (+n).toLocaleString();
+  const BANDS = [
+    ["First concern", "concern", TIPS.lt_concern, "warn"],
+    ["High-risk alert", "alert", TIPS.lt_alert, "crit"],
+  ];
+
+  return (
+    <>
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.lead_time}>Early-Warning Lead Time</Tip></h3>
+            <div className="desc">
+              Of {fmt(data.n_deteriorated)} admissions that reached a{" "}
+              <Tip text={TIPS.lt_event}>critical lab value</Tip>, how many hours
+              earlier our trend-aware risk score had already escalated.
+            </div>
+          </div>
+        </div>
+
+        <div className="leadbands">
+          {BANDS.map(([label, key, tip, tone]) => {
+            const b = data[key];
+            return (
+              <div key={key} className={`panel leadband ${tone}`}>
+                <div className="eyebrow"><Tip text={tip}>{label}</Tip></div>
+                <div className="leadbig">
+                  {b.median_lead_hours != null ? b.median_lead_hours : "—"}
+                  <span className="unit">h median lead</span>
+                </div>
+                <div className="leadsub">
+                  <span><b>{b.early_warning_rate}%</b> warned early</span>
+                  <span><Tip text={TIPS.lt_rate}>{fmt(b.n_early_warning)} admissions</Tip></span>
+                </div>
+                {b.median_lead_hours != null && (
+                  <div className="leadsub muted">
+                    <span>75th pct {b.p75_lead_hours} h</span>
+                    <span>max {b.max_lead_hours} h</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="evalnote"><Icon name="info" />{data.note}</div>
+      </section>
+
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3>How to read this</h3>
+            <div className="desc">Why "first concern" leads more often than "high-risk alert"</div>
+          </div>
+        </div>
+        <div className="leadexplain">
+          The risk score weights a critical value heavily, so a single critical
+          result is often what first pushes a patient to <b>High</b> — meaning the
+          high-risk alert tends to coincide with the deterioration event rather than
+          precede it. The softer <b>first concern</b> threshold (the score leaving
+          Low) is reached through accumulating abnormal and worsening trends, so it
+          fires earlier. This gap is exactly the motivation for a learned risk model
+          that can read the trend before any single value turns critical.
         </div>
       </section>
     </>
@@ -471,7 +828,7 @@ function LabCard({ lab, info }) {
             <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6, fontSize: 12 }}
               labelStyle={{ color: "#c2c6d6" }} />
             <Line type="monotone" dataKey="value" stroke={st.color} strokeWidth={1.6}
-              dot={{ r: 1.5 }} activeDot={{ r: 4 }} />
+              dot={false} activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
         {latest != null && (

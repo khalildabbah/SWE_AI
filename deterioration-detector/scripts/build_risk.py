@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.storage.db import connect  # noqa: E402
 from src.analysis.risk_score import LabState, score_admission  # noqa: E402
+from src.analysis.lead_time import compute_lead_time  # noqa: E402
 
 WINDOW = 3  # how many recent values per lab the trend detector needs
 
@@ -83,7 +84,115 @@ def main() -> None:
         SELECT category, COUNT(*) FROM risk_summary GROUP BY category
     """).fetchall()
     print(f"      Done in {time.time()-t0:.1f}s | risk distribution: {dict(dist)}")
+
+    build_flag_eval(con)
+    build_lead_time(con)
     con.close()
+
+
+def build_flag_eval(con) -> None:
+    """
+    Score our reference-range detector against MIMIC's own `FLAG` column.
+
+    Per clean value:  predicted positive = value outside our normal range
+    (lab_def low/high, i.e. classify() != normal); actual positive = FLAG marked
+    'abnormal'. We aggregate the 2x2 confusion-matrix counts per lab (and the API
+    sums them for the overall view). All done in DuckDB -- no row-by-row Python.
+    """
+    print("[+] Evaluating detector vs MIMIC FLAG (confusion matrix per lab) ...")
+    con.execute("""
+        CREATE OR REPLACE TABLE flag_eval AS
+        SELECT
+            l.itemid,
+            l.test_name,
+            SUM(CASE WHEN pred AND act THEN 1 ELSE 0 END)         AS tp,
+            SUM(CASE WHEN pred AND NOT act THEN 1 ELSE 0 END)     AS fp,
+            SUM(CASE WHEN NOT pred AND act THEN 1 ELSE 0 END)     AS fn,
+            SUM(CASE WHEN NOT pred AND NOT act THEN 1 ELSE 0 END) AS tn
+        FROM (
+            SELECT
+                c.itemid,
+                c.test_name,
+                (c.value < d.low OR c.value > d.high) AS pred,
+                (lower(coalesce(c.flag, '')) = 'abnormal') AS act
+            FROM labs_clean c
+            JOIN lab_def d ON d.itemid = c.itemid
+        ) l
+        GROUP BY l.itemid, l.test_name
+    """)
+    tot = con.execute(
+        "SELECT SUM(tp), SUM(fp), SUM(fn), SUM(tn) FROM flag_eval").fetchone()
+    print(f"      Overall  tp={tot[0]:,} fp={tot[1]:,} fn={tot[2]:,} tn={tot[3]:,}")
+
+
+def build_lead_time(con) -> None:
+    """
+    Compute the early-warning lead time for EVERY admission and store it.
+
+    For each admission we replay its labs chronologically and record when our
+    risk score first hit High (the alert) versus when the first critical value
+    appeared (the deterioration event); the gap is the lead time. The headline
+    "flagged a median of N hours early" is then a one-line query over this table.
+
+    The full per-admission timeline is streamed admission-by-admission (rows come
+    back ordered), so memory stays flat even on the full 4.6M-row dataset.
+    """
+    print("[+] Computing early-warning lead time per admission ...")
+    con.execute("""CREATE OR REPLACE TABLE lead_time(
+        subject_id INTEGER, hadm_id INTEGER,
+        deteriorated BOOLEAN, concerned BOOLEAN, alerted BOOLEAN,
+        event_hours DOUBLE, concern_hours DOUBLE, alert_hours DOUBLE,
+        lead_concern_hours DOUBLE, lead_alert_hours DOUBLE,
+        event_lab VARCHAR
+    )""")
+
+    cur = con.execute("""
+        SELECT subject_id, hadm_id, itemid, test_name, unit, charttime, value
+        FROM labs_clean
+        ORDER BY subject_id, hadm_id, charttime, itemid
+    """)
+
+    batch = []
+
+    def flush(key, series):
+        if not series:
+            return
+        r = compute_lead_time(series)
+        batch.append((key[0], key[1], r.deteriorated, r.concerned, r.alerted,
+                      r.event_hours, r.concern_hours, r.alert_hours,
+                      r.lead_concern_hours, r.lead_alert_hours, r.event_lab))
+
+    cur_key, series = None, {}
+    while True:
+        rows = cur.fetchmany(50_000)
+        if not rows:
+            break
+        for subj, hadm, itemid, name, unit, t, v in rows:
+            key = (subj, hadm)
+            if key != cur_key:
+                flush(cur_key, series)
+                cur_key, series = key, {}
+            d = series.setdefault(itemid, {"test_name": name, "unit": unit, "points": []})
+            d["points"].append((t, v))
+    flush(cur_key, series)
+
+    con.executemany("INSERT INTO lead_time VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
+
+    n_det, n_early, med = con.execute("""
+        SELECT
+            SUM(CASE WHEN deteriorated THEN 1 ELSE 0 END),
+            SUM(CASE WHEN deteriorated AND concerned AND lead_concern_hours > 0
+                     THEN 1 ELSE 0 END),
+            median(CASE WHEN deteriorated AND concerned AND lead_concern_hours > 0
+                        THEN lead_concern_hours END)
+        FROM lead_time
+    """).fetchone()
+    n_det = n_det or 0
+    n_early = n_early or 0
+    rate = (100 * n_early / n_det) if n_det else 0.0
+    med = med or 0.0
+    print(f"      {n_early:,}/{n_det:,} deteriorating admissions had an early "
+          f"concern ({rate:.0f}%), median lead {med:.1f}h before first critical value")
 
 
 if __name__ == "__main__":

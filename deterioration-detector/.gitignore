@@ -3,6 +3,9 @@ data/raw/*.csv
 data/raw/*.xlsx
 data/processed/*.duckdb
 
+# secrets / local config
+.env
+
 # python
 .venv/
 __pycache__/

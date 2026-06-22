@@ -46,10 +46,22 @@ LABS = {
     51221: ("Hematocrit", "%"),
     50813: ("Lactate", "mmol/L"),
 }
-# normal reference ranges (low, high) -- used only to set a realistic FLAG column
+# normal reference ranges (low, high) -- the generic adult ranges our detector
+# (src/ingestion/lab_dictionary.py) uses. The series generator targets these.
 RANGES = {
     50912: (0.6, 1.2), 51006: (7.0, 20.0), 50971: (3.5, 5.0), 50983: (135, 145),
     50882: (22, 29), 51301: (4.0, 11.0), 51221: (36, 48), 50813: (0.5, 2.0),
+}
+# "Originating-lab" reference intervals used to set the FLAG column. In real
+# MIMIC-III the abnormal flag comes from each analyzer's OWN reference range,
+# which differs slightly from the generic adult ranges our detector applies.
+# Modelling that small offset here makes the detector-vs-FLAG evaluation
+# (scripts/build_risk.py + /api/evaluation) non-trivial instead of a tautology:
+# values that fall in the gap between the two range sets become honest
+# false-positives / false-negatives near the reference boundaries.
+FLAG_RANGES = {
+    50912: (0.7, 1.3), 51006: (8.0, 21.0), 50971: (3.5, 5.1), 50983: (136, 145),
+    50882: (22, 28), 51301: (4.5, 11.5), 51221: (35, 47), 50813: (0.5, 2.2),
 }
 # physiologically plausible clamps so generated noise never produces a value
 # that build_db.py would discard as garbage (must stay within lab_dictionary).
@@ -165,7 +177,8 @@ RES = {i: (1.0 if hi >= 20 else 0.1) for i, (_, hi) in RANGES.items()}
 
 
 def flag_for(itemid: int, value: float) -> str:
-    low, high = RANGES[itemid]
+    # flagged against the originating-lab interval, NOT our detector's range
+    low, high = FLAG_RANGES[itemid]
     return "abnormal" if (value < low or value > high) else ""
 
 

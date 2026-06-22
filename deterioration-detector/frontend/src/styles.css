@@ -334,6 +334,125 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .labcard.abnormal .latest { color: var(--tertiary); }
 .labcard.critical .latest { color: var(--error); }
 
+/* ── Patient Monitoring: header strip ── */
+.monitorhead {
+  padding: 22px 28px; display: flex; align-items: center; justify-content: space-between;
+  gap: 24px; position: relative; overflow: hidden; flex-wrap: wrap;
+}
+.monitorhead .ghost { position: absolute; right: -10px; top: -18px; font-size: 130px; pointer-events: none; }
+.monitorhead.High .ghost { color: rgba(255, 180, 171, 0.08); }
+.monitorhead.Medium .ghost { color: rgba(255, 183, 134, 0.08); }
+.monitorhead.Low .ghost { color: rgba(16, 185, 129, 0.08); }
+.monitorhead .who { display: flex; align-items: center; gap: 16px; position: relative; z-index: 1; }
+.monitorhead .who > .ghost { position: static; font-size: 34px; color: var(--primary); }
+.monitorhead .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--outline); }
+.monitorhead h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin: 2px 0; color: var(--on-surface); }
+.monitorhead .adm { font-family: "Geist Mono", monospace; font-size: 12px; color: var(--outline); }
+.monitorhead .summary { display: flex; gap: 28px; position: relative; z-index: 1; }
+.monitorhead .stat { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.monitorhead .stat .num { font-family: "Geist Mono", monospace; font-size: 34px; font-weight: 800; color: var(--on-surface); line-height: 1; }
+.monitorhead .stat.crit .num { color: var(--error); }
+.monitorhead .stat .lbl { font-size: 11px; color: var(--outline); letter-spacing: 0.04em; }
+.monitorhead .badge { padding: 4px 12px; border-radius: var(--radius); font-size: 13px; font-weight: 800; }
+.monitorhead.High .badge { background: var(--error); color: #690005; }
+.monitorhead.Medium .badge { background: var(--tertiary); color: var(--on-tertiary-container); }
+.monitorhead.Low .badge { background: var(--healthy); color: #04261b; }
+
+/* ── Patient Monitoring: clinical syndrome cards ── */
+.synempty { display: flex; align-items: center; gap: 10px; justify-content: center; text-align: left; }
+.synempty .material-symbols-outlined { color: var(--healthy); font-size: 20px; }
+.syngrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.syncard {
+  background: var(--surface); border: 1px solid var(--outline-variant);
+  border-left: 4px solid var(--outline); border-radius: var(--radius);
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
+}
+.syncard.warning { border-left-color: var(--tertiary); }
+.syncard.critical { border-left-color: var(--error); }
+.syncard .synhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.syncard .syntitle { display: flex; align-items: center; gap: 8px; }
+.syncard .syntitle .material-symbols-outlined { font-size: 20px; }
+.syncard.warning .syntitle .material-symbols-outlined { color: var(--tertiary); }
+.syncard.critical .syntitle .material-symbols-outlined { color: var(--error); }
+.syncard .name { font-size: 15px; font-weight: 700; color: var(--on-surface); }
+.syncard .synplain { font-size: 13px; line-height: 1.5; color: var(--on-surface-variant); }
+.syncard .synsignals { display: flex; flex-wrap: wrap; gap: 8px; }
+.syncard .signal {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px;
+  border-radius: var(--radius); font-size: 12px; font-weight: 600;
+  background: var(--surface-high); color: var(--on-surface);
+}
+.syncard .signal .sv { font-family: "Geist Mono", monospace; font-size: 11px; }
+.syncard .signal.abnormal { background: var(--tertiary-container); color: var(--on-tertiary-container); }
+.syncard .signal.critical { background: var(--error-container); color: var(--on-error-container); }
+.syncard .signal.absent { background: transparent; border: 1px dashed var(--outline-variant); color: var(--outline); }
+.syncard .synfoot {
+  display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--tertiary); font-weight: 600;
+}
+.syncard .synfoot .material-symbols-outlined { font-size: 16px; }
+
+/* ── Detector Accuracy page ── */
+.evalcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
+.evalmetric { background: var(--surface-high); min-height: 96px; }
+.evalmetric .val { font-family: "Geist Mono", monospace; font-size: 32px; }
+.evalmetric.warn .val { color: var(--tertiary); }
+.evalmetric.ok .val { color: var(--healthy); }
+.evalnote {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 18px;
+  font-size: 12px; line-height: 1.5; color: var(--outline);
+}
+.evalnote .material-symbols-outlined { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+.cmatrix { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .cmatrix { grid-template-columns: 1fr; } }
+.cmcell {
+  display: flex; flex-direction: column; gap: 4px; padding: 16px 18px;
+  border-radius: var(--radius); border: 1px solid var(--outline-variant);
+  background: var(--surface-high); border-left: 4px solid var(--outline);
+}
+.cmcell .k { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--outline); }
+.cmcell .n { font-family: "Geist Mono", monospace; font-size: 26px; font-weight: 700; color: var(--on-surface); }
+.cmcell .d { font-size: 12px; color: var(--on-surface-variant); }
+.cmcell.tp { border-left-color: var(--healthy); }
+.cmcell.tn { border-left-color: var(--healthy); }
+.cmcell.fp { border-left-color: var(--tertiary); }
+.cmcell.fn { border-left-color: var(--error); }
+
+.agbar { display: inline-block; width: 90px; height: 8px; border-radius: 4px; background: var(--surface-highest); overflow: hidden; vertical-align: middle; }
+.agbar .fill { display: block; height: 100%; background: var(--healthy); border-radius: 4px; }
+
+/* ── Early Warning (lead time) ── */
+.leadbands { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.leadband {
+  background: var(--surface-high); padding: 18px 20px;
+  border-left: 4px solid var(--outline); display: flex; flex-direction: column; gap: 8px;
+}
+.leadband.warn { border-left-color: var(--warning); }
+.leadband.crit { border-left-color: var(--critical); }
+.leadband .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--outline); }
+.leadbig { font-family: "Geist Mono", monospace; font-size: 38px; font-weight: 700; color: var(--on-surface); line-height: 1; }
+.leadband.warn .leadbig { color: var(--tertiary); }
+.leadband.crit .leadbig { color: var(--error); }
+.leadbig .unit { font-size: 13px; font-weight: 500; color: var(--outline); margin-left: 8px; letter-spacing: 0; }
+.leadsub { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--on-surface-variant); }
+.leadsub.muted { font-size: 11px; color: var(--outline); font-family: "Geist Mono", monospace; }
+.leadsub b { color: var(--on-surface); }
+.leadexplain { font-size: 14px; line-height: 1.6; color: var(--on-surface-variant); padding: 4px 2px; }
+.leadexplain b { color: var(--on-surface); }
+
+/* lead-time markers on the per-patient trajectory */
+.leadcallout {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 12px;
+  font-size: 13px; color: var(--on-surface-variant);
+}
+.leadcallout .material-symbols-outlined { font-size: 16px; color: var(--warning); }
+.trajlegend { display: flex; gap: 16px; align-items: center; }
+.trajlegend .lg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--outline); }
+.trajlegend .swatch { width: 14px; height: 0; border-top: 2px dashed var(--outline); display: inline-block; }
+.trajlegend .concern .swatch { border-top-color: var(--warning); }
+.trajlegend .event .swatch { border-top-color: var(--critical); }
+
 /* ── Footer / data info bar ── */
 .databar {
   height: 32px; flex-shrink: 0; background: var(--surface-lowest);

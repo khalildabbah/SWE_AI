@@ -16,6 +16,9 @@ from src.storage.db import connect, admission_series
 from src.analysis.risk_score import LabState, score_admission
 from src.analysis.alerts import build_alerts
 from src.analysis.trajectory import compute_trajectory
+from src.analysis.syndromes import detect_syndromes
+from src.analysis.evaluation import confusion_metrics
+from src.analysis.lead_time import compute_lead_time
 from src.ingestion.lab_dictionary import LAB_DEFS
 
 app = FastAPI(title="Patient Deterioration Detector", version="0.1.0")
@@ -33,6 +36,100 @@ def stats():
         "SELECT category, COUNT(*) FROM risk_summary GROUP BY category").fetchall())
     con.close()
     return {"pipeline": pipeline, "risk_distribution": dist}
+
+
+@app.get("/api/evaluation")
+def evaluation():
+    """Detector-vs-MIMIC-FLAG accuracy: overall + per-lab confusion metrics."""
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT itemid, test_name, tp, fp, fn, tn FROM flag_eval ORDER BY test_name"
+        ).fetchall()
+    except Exception:
+        # older DB built before this feature -> tell the client to rebuild
+        con.close()
+        raise HTTPException(503, "Evaluation not available — re-run scripts/build_risk.py")
+    con.close()
+    if not rows:
+        raise HTTPException(503, "Evaluation not available — re-run scripts/build_risk.py")
+
+    per_lab = []
+    agg = [0, 0, 0, 0]  # tp, fp, fn, tn
+    for itemid, name, tp, fp, fn, tn in rows:
+        agg = [agg[0] + tp, agg[1] + fp, agg[2] + fn, agg[3] + tn]
+        per_lab.append({"itemid": itemid, "test_name": name,
+                        **confusion_metrics(tp, fp, fn, tn)})
+    return {
+        "overall": confusion_metrics(*agg),
+        "per_lab": per_lab,
+        # surfaced in the UI so the numbers are read honestly
+        "note": ("Scored against MIMIC's own 'abnormal' FLAG as ground truth. "
+                 "Disagreements arise where our generic adult reference ranges "
+                 "differ from each lab's originating reference interval — "
+                 "informative, not clinical validation."),
+    }
+
+
+@app.get("/api/lead-time")
+def lead_time():
+    """
+    Cohort early-warning story: how many hours before the first critical lab
+    value our risk score escalated. Reported at two thresholds — "first concern"
+    (Medium+) and "high risk" (High). Precomputed in build_risk.py.
+    """
+    con = connect()
+    try:
+        n_det = con.execute(
+            "SELECT SUM(CASE WHEN deteriorated THEN 1 ELSE 0 END) FROM lead_time"
+        ).fetchone()[0]
+        bands = {}
+        for key, lead_col, flag_col in (
+            ("concern", "lead_concern_hours", "concerned"),
+            ("alert", "lead_alert_hours", "alerted"),
+        ):
+            bands[key] = con.execute(f"""
+                SELECT
+                    SUM(CASE WHEN deteriorated AND {flag_col} AND {lead_col} > 0
+                             THEN 1 ELSE 0 END),
+                    median({lead_col}) FILTER (
+                        WHERE deteriorated AND {flag_col} AND {lead_col} > 0),
+                    quantile_cont({lead_col}, 0.75) FILTER (
+                        WHERE deteriorated AND {flag_col} AND {lead_col} > 0),
+                    max({lead_col}) FILTER (
+                        WHERE deteriorated AND {flag_col} AND {lead_col} > 0)
+                FROM lead_time
+            """).fetchone()
+    except Exception:
+        con.close()
+        raise HTTPException(503, "Lead-time not available — re-run scripts/build_risk.py")
+    con.close()
+
+    if not n_det:
+        raise HTTPException(503, "Lead-time not available — re-run scripts/build_risk.py")
+
+    rnd = lambda x: None if x is None else round(x, 1)
+
+    def band(row):
+        n_early = row[0] or 0
+        return {
+            "n_early_warning": n_early,
+            "early_warning_rate": round(100 * n_early / n_det, 1),
+            "median_lead_hours": rnd(row[1]),
+            "p75_lead_hours": rnd(row[2]),
+            "max_lead_hours": rnd(row[3]),
+        }
+
+    return {
+        "n_deteriorated": n_det,
+        "concern": band(bands["concern"]),   # first time score left Low (Medium+)
+        "alert": band(bands["alert"]),        # first time score reached High
+        "note": ("'Deterioration' here is a lab-based proxy — the first critically "
+                 "out-of-range value — because this prototype ingests only LABEVENTS "
+                 "(no death/ICU-transfer outcomes). Lead time is how many hours earlier "
+                 "the trend-aware score escalated. A proxy measure, not clinical "
+                 "validation."),
+    }
 
 
 @app.get("/api/admissions")
@@ -92,13 +189,25 @@ def admission_detail(subject_id: int, hadm_id: int):
         })
 
     risk = score_admission(states)
+    lt = compute_lead_time(series)
     return {
         "subject_id": subject_id,
         "hadm_id": hadm_id,
         "risk": {"score": risk.score, "category": risk.category,
                  "contributions": risk.contributions},
         "alerts": build_alerts(risk),
+        "syndromes": detect_syndromes(states),
         "trajectory": compute_trajectory(series),
+        "lead_time": {
+            "deteriorated": lt.deteriorated, "concerned": lt.concerned,
+            "alerted": lt.alerted,
+            "event_hours": lt.event_hours, "concern_hours": lt.concern_hours,
+            "alert_hours": lt.alert_hours,
+            "lead_concern_hours": lt.lead_concern_hours,
+            "lead_alert_hours": lt.lead_alert_hours,
+            "event_lab": lt.event_lab, "event_time": lt.event_time,
+            "concern_time": lt.concern_time, "alert_time": lt.alert_time,
+        },
         "labs": lab_series,
     }
 
