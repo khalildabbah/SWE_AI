@@ -4,19 +4,28 @@ import {
   ReferenceArea, Area, AreaChart, CartesianGrid,
 } from "recharts";
 
-const RISK_COLOR = { Low: "#2ea043", Medium: "#d29922", High: "#f85149" };
+// Clinical palette (mirrors styles.css tokens) for chart strokes/fills.
+const RISK_COLOR = { Low: "#10b981", Medium: "#f59e0b", High: "#ef4444" };
 // Per-lab abnormality status → colour + label (matches src/analysis/abnormal.py).
 const STATUS = {
-  normal: { color: "#2ea043", label: "Normal" },
-  abnormal: { color: "#d29922", label: "Abnormal" },
-  critical: { color: "#f85149", label: "Critical" },
+  normal: { color: "#10b981", label: "Normal" },
+  abnormal: { color: "#f59e0b", label: "Abnormal" },
+  critical: { color: "#ef4444", label: "Critical" },
 };
 const TREND = {
-  worsening: { icon: "▲", label: "worsening", color: "#f85149" },
-  improving: { icon: "▼", label: "improving", color: "#2ea043" },
-  stable: { icon: "–", label: "stable", color: "#8b98a5" },
+  worsening: { icon: "trending_up", arrow: "↑", label: "Worsening", cls: "worsening" },
+  improving: { icon: "trending_down", arrow: "↓", label: "Improving", cls: "improving" },
+  stable: { icon: "horizontal_rule", arrow: "", label: "Stable", cls: "stable" },
+};
+const NOTE = {
+  High: "Critical threshold breached",
+  Medium: "Elevated — monitor closely",
+  Low: "Stable baseline",
 };
 const fmtTime = (iso) => iso.replace("T", " ").slice(0, 16);
+const Icon = ({ name, className = "" }) => (
+  <span className={`material-symbols-outlined ${className}`}>{name}</span>
+);
 
 // Plain-English explanations so non-clinical users understand every term on hover.
 const GLOSSARY = {
@@ -135,204 +144,343 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [visible, selected]);
 
+  const FILTERS = [["High", "High"], ["Medium", "Med"], ["Low", "Low"], ["", "All"]];
+
   return (
     <div className="app">
-      <div className="sidebar">
-        <header className="top">
-          <h1>🏥 Patient Deterioration Detector</h1>
-          <p>Early-warning from lab trends · MIMIC-III LABEVENTS</p>
-        </header>
-        {stats && <StatsBar stats={stats} />}
-        <div className="filters">
-          {["High", "Medium", "Low", ""].map((c) => (
-            <button key={c || "all"} className={filter === c ? "active" : ""}
-              title={c ? TIPS.category : "Show every admission regardless of risk."}
-              onClick={() => setFilter(c)}>{c || "All"}</button>
-          ))}
+      {/* ── Side navigation rail + patient explorer ── */}
+      <aside className="rail">
+        <div className="brand">
+          <Icon name="monitor_heart" />
+          <div>
+            <h1>Clinical Control</h1>
+            <div className="sub">Deterioration Watch</div>
+          </div>
         </div>
-        <div className="controls">
-          <input className="search" type="search" value={query}
-            placeholder="🔍 Search patient / admission ID" title={TIPS.search}
-            onChange={(e) => setQuery(e.target.value)} />
-          <select className="sort" value={sort} title={TIPS.sort}
-            onChange={(e) => setSort(e.target.value)}>
-            <option value="score">Sort: risk score</option>
-            <option value="measurements">Sort: most lab data</option>
-          </select>
-        </div>
-        <div className="list">
-          {boardLoading && <div className="placeholder small">Loading admissions…</div>}
-          {boardError && <div className="placeholder small err">Couldn't load admissions — is the API running?</div>}
-          {!boardLoading && !boardError && visible.length === 0 && (
-            <div className="placeholder small">
-              {query ? `No admissions match “${query}”.` : "No admissions in this category."}
-            </div>
-          )}
-          {visible.map((a) => (
-            <div key={`${a.subject_id}-${a.hadm_id}`}
-              className={`row ${selected && selected.hadm_id === a.hadm_id ? "sel" : ""}`}
-              onClick={() => setSelected(a)}>
-              <div>
-                <div className="pid">
-                  {a.n_high > 0 && <span className="warn" title={TIPS.warn}>⚠</span>}
-                  Patient {a.subject_id}
-                </div>
-                <div className="meta">
-                  Adm {a.hadm_id} ·{" "}
-                  <span title={TIPS.labs}>{a.n_measurements} labs</span> ·{" "}
-                  <span title={TIPS.span}>{a.span_hours}h</span> ·{" "}
-                  <span title={TIPS.critical}>{a.n_high} critical</span> ·{" "}
-                  <span title={TIPS.worsening}>{a.n_worsening} worsening</span>
-                </div>
-              </div>
-              <span className={`badge ${a.category}`} title={TIPS.badge}>{a.category} · {a.score}</span>
-            </div>
-          ))}
-        </div>
-      </div>
 
-      <div className="detail">
-        {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
-        {!detail && !detailError && <div className="placeholder">Loading patient…</div>}
-        {detail && <Detail d={detail} />}
-      </div>
+        <nav className="nav">
+          <a className="active"><Icon name="dashboard" /><span>Dashboard</span></a>
+          <a><Icon name="monitor_heart" /><span>Patient Monitoring</span></a>
+          <a><Icon name="warning" /><span>Risk Alerts</span></a>
+        </nav>
+
+        <div className="explorer">
+          <div className="searchwrap">
+            <Icon name="search" />
+            <input className="search" type="search" value={query}
+              placeholder="Search patient / admission ID" title={TIPS.search}
+              onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <div className="filters">
+            {FILTERS.map(([c, label]) => (
+              <button key={c || "all"} className={filter === c ? "active" : ""}
+                title={c ? TIPS.category : "Show every admission regardless of risk."}
+                onClick={() => setFilter(c)}>{label}</button>
+            ))}
+          </div>
+          <div className="sortwrap">
+            <select className="sort" value={sort} title={TIPS.sort}
+              onChange={(e) => setSort(e.target.value)}>
+              <option value="score">Sort: risk score</option>
+              <option value="measurements">Sort: most lab data</option>
+            </select>
+          </div>
+
+          <div className="list">
+            {boardLoading && <div className="placeholder small">Loading admissions…</div>}
+            {boardError && <div className="placeholder small err">Couldn't load admissions — is the API running?</div>}
+            {!boardLoading && !boardError && visible.length === 0 && (
+              <div className="placeholder small">
+                {query ? `No admissions match “${query}”.` : "No admissions in this category."}
+              </div>
+            )}
+            {visible.map((a) => {
+              const sel = selected && selected.subject_id === a.subject_id && selected.hadm_id === a.hadm_id;
+              return (
+                <div key={`${a.subject_id}-${a.hadm_id}`}
+                  className={`prow ${sel ? "sel" : ""}`} onClick={() => setSelected(a)}>
+                  <div className="top">
+                    <span className={`pid ${a.n_high > 0 ? "crit" : ""}`}>
+                      {a.n_high > 0 && <Icon name="warning" />}
+                      Patient {a.subject_id}
+                    </span>
+                    <span className={`chip ${a.category}`} title={TIPS.badge}>
+                      {a.category} · <span className="pts">{a.score}</span>
+                    </span>
+                  </div>
+                  <div className="meta" title={`${a.n_measurements} labs · ${a.span_hours}h · ${a.n_high} critical`}>
+                    Adm {a.hadm_id} · {a.n_measurements} labs · {a.span_hours}h
+                  </div>
+                  {a.n_worsening > 0 && (
+                    <div className="worse"><Icon name="history" />{a.n_worsening} worsening metric{a.n_worsening > 1 ? "s" : ""} detected</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="railfoot">
+          <nav className="nav">
+            <a><Icon name="help" /><span>Support</span></a>
+            <a><Icon name="logout" /><span>Logout</span></a>
+          </nav>
+        </div>
+      </aside>
+
+      {/* ── Main content ── */}
+      <main className="main">
+        <header className="topbar">
+          <div className="lead">
+            <span className="title">Deterioration Watch</span>
+            <nav className="tabs">
+              <span className="active">Active Cases</span>
+              <span>Risk Distribution</span>
+              <span>Unit Metrics</span>
+            </nav>
+          </div>
+          <div className="actions">
+            <div className="live"><span className="dot" />System Live</div>
+            <Icon name="notifications" />
+            <Icon name="apps" />
+            <div className="avatar"><Icon name="person" /></div>
+          </div>
+        </header>
+
+        <div className="canvas">
+          {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
+          {!detail && !detailError && <div className="placeholder">Loading patient…</div>}
+          {detail && <Detail d={detail} meta={selected} />}
+        </div>
+
+        <footer className="databar">
+          {stats ? <DataBar stats={stats} /> : <div className="seg">DB: MIMIC-III LABEVENTS</div>}
+          <div className="seg">STATION: 4B-NC-01 · CLINICIAN: DR. SMITH</div>
+        </footer>
+      </main>
     </div>
   );
 }
 
-function StatsBar({ stats }) {
+function DataBar({ stats }) {
   const p = stats.pipeline;
   return (
-    <div className="stats">
-      <Stat n={(+p.raw_rows).toLocaleString()} l="rows ingested" tip={TIPS.raw_rows} />
-      <Stat n={(+p.kept_rows).toLocaleString()} l="clean values" tip={TIPS.kept_rows} />
-      <Stat n={(+p.patients).toLocaleString()} l="patients" tip={TIPS.patients} />
-      <Stat n={`${p.build_seconds}s`} l="pipeline time" tip={TIPS.build_seconds} />
+    <div className="seg">
+      <Tip text={TIPS.raw_rows}><span>{(+p.raw_rows).toLocaleString()} ROWS</span></Tip>
+      <Tip text={TIPS.kept_rows}><span>{(+p.kept_rows).toLocaleString()} CLEAN</span></Tip>
+      <Tip text={TIPS.patients}><span>{(+p.patients).toLocaleString()} PATIENTS</span></Tip>
+      <Tip text={TIPS.build_seconds}><span>ENGINE: {p.build_seconds}s</span></Tip>
     </div>
   );
 }
-const Stat = ({ n, l, tip }) => (
-  <div className="stat">
-    <div className="n">{n}</div>
-    <div className="l">{tip ? <Tip text={tip}>{l}</Tip> : l}</div>
-  </div>
-);
 
-function Detail({ d }) {
+function Detail({ d, meta }) {
+  const cat = d.risk.category;
   const traj = d.trajectory.map((t) => ({ ...t, label: fmtTime(t.time) }));
   // status/trend per lab live in the risk breakdown, keyed by itemid.
   const byId = Object.fromEntries((d.risk.contributions || []).map((c) => [c.itemid, c]));
+  const stroke = RISK_COLOR[cat];
+
+  // Header metric cluster — real per-admission summary (from the board row).
+  const nHigh = meta?.n_high ?? (d.risk.contributions || []).filter((c) => c.status === "critical").length;
+  const nWorse = meta?.n_worsening ?? (d.risk.contributions || []).filter((c) => c.trend === "worsening").length;
+  const nLabs = meta?.n_measurements ?? d.labs.reduce((s, l) => s + l.points.length, 0);
+  const span = meta?.span_hours;
+
   return (
     <>
-      <div className="card">
-        <h2>Patient {d.subject_id} · Admission {d.hadm_id}</h2>
-        <div className="riskhead">
-          <Tip text={TIPS.riskScore}>
-            <div className="big" style={{ color: RISK_COLOR[d.risk.category] }}>
-              {d.risk.score}
+      {/* Bento header: score card + metric cluster */}
+      <section className="bento">
+        <div className={`panel scorecard ${cat}`}>
+          <Icon name="warning" className="ghost" />
+          <div>
+            <div className="eyebrow">Current Risk Index</div>
+            <h2>Patient {d.subject_id}</h2>
+            <div className="adm">ADMISSION ID: {d.hadm_id}</div>
+          </div>
+          <div className="scorerow">
+            <Tip text={TIPS.riskScore}><span className="big">{d.risk.score}</span></Tip>
+            <div>
+              <span className="badge" title={TIPS.category}>{cat} Risk</span>
+              <div className="note">{NOTE[cat]}</div>
             </div>
-          </Tip>
-          <span className={`badge ${d.risk.category}`} title={TIPS.category}>{d.risk.category} RISK</span>
+          </div>
         </div>
-      </div>
 
-      <div className="card">
-        <h2><Tip text={TIPS.trajectory}>Risk trajectory over time</Tip></h2>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={traj}>
+        <div className="cluster">
+          <div className="panel metric">
+            <div className="label"><Tip text={TIPS.labs}>Labs Recorded</Tip></div>
+            <div className="val">{(+nLabs).toLocaleString()}</div>
+            <div className="delta ok"><Icon name="science" />this admission</div>
+          </div>
+          <div className="panel metric">
+            <div className="label"><Tip text={TIPS.critical}>Critical Labs</Tip></div>
+            <div className="val">{nHigh}</div>
+            <div className={`delta ${nHigh > 0 ? "crit" : "ok"}`}>
+              <Icon name={nHigh > 0 ? "priority_high" : "check"} />out of range
+            </div>
+          </div>
+          <div className="panel metric">
+            <div className="label"><Tip text={TIPS.worsening}>Worsening</Tip></div>
+            <div className="val">{nWorse}</div>
+            <div className={`delta ${nWorse > 0 ? "warn" : "ok"}`}>
+              <Icon name={nWorse > 0 ? "trending_up" : "horizontal_rule"} />
+              {span != null ? `over ${span}h` : "trending"}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Risk trajectory */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.trajectory}>Risk Trajectory Over Time</Tip></h3>
+            <div className="desc">Combined deterioration index across the hospital stay</div>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={300}>
+          <AreaChart data={traj} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#f85149" stopOpacity={0.5} />
-                <stop offset="100%" stopColor="#f85149" stopOpacity={0.02} />
+                <stop offset="0%" stopColor={stroke} stopOpacity={0.45} />
+                <stop offset="100%" stopColor={stroke} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid stroke="#2a3540" strokeDasharray="3 3" />
-            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#8b98a5" }} minTickGap={40} />
-            <YAxis tick={{ fontSize: 11, fill: "#8b98a5" }} />
-            <Tooltip contentStyle={{ background: "#1a2129", border: "1px solid #2a3540" }} />
-            <Area type="monotone" dataKey="score" stroke="#f85149" fill="url(#g)" strokeWidth={2} />
+            <CartesianGrid stroke="#424754" strokeDasharray="4 4" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#8c909f", fontFamily: "Geist Mono" }} minTickGap={48} />
+            <YAxis tick={{ fontSize: 11, fill: "#8c909f", fontFamily: "Geist Mono" }} width={36} />
+            <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6 }}
+              labelStyle={{ color: "#c2c6d6" }} />
+            <Area type="monotone" dataKey="score" stroke={stroke} fill="url(#g)" strokeWidth={3}
+              dot={{ r: 2, fill: stroke }} activeDot={{ r: 5 }} />
           </AreaChart>
         </ResponsiveContainer>
-      </div>
+      </section>
 
-      <div className="card">
-        <h2><Tip text={TIPS.breakdown}>Why this score?</Tip></h2>
-        <Breakdown contributions={d.risk.contributions || []} />
-      </div>
-
-      <div className="card">
-        <h2><Tip text={TIPS.alerts}>Early-warning alerts</Tip></h2>
-        {d.alerts.length === 0 && <div className="placeholder" style={{ marginTop: 0 }}>No alerts</div>}
-        {d.alerts.map((a, i) => (
-          <div key={i} className={`alert ${a.level}`}>
-            <span className={`dot ${a.level}`} />{a.message}
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
-        <h2><Tip text={TIPS.labTrends}>Lab trends ({d.labs.length} tests)</Tip></h2>
-        <div className="labgrid">
-          {d.labs.map((lab) => <LabChart key={lab.itemid} lab={lab} info={byId[lab.itemid]} />)}
+      {/* Why this score? — factor table */}
+      <section className="panel factortable">
+        <div className="head">
+          <h3><Tip text={TIPS.breakdown}>Why this score?</Tip></h3>
+          <div className="note"><Icon name="info" />Per-lab severity &amp; trend breakdown</div>
         </div>
-      </div>
+        <FactorTable contributions={d.risk.contributions || []} />
+      </section>
+
+      {/* Early-warning alerts */}
+      <section className="panel alerts">
+        <h3><Icon name="emergency" /><Tip text={TIPS.alerts}>Early-Warning Alerts</Tip></h3>
+        {d.alerts.length === 0
+          ? <div className="placeholder small" style={{ margin: 0, textAlign: "left" }}>No alerts — all labs within range.</div>
+          : (
+            <div className="alertlist">
+              {d.alerts.map((a, i) => (
+                <div key={i} className={`alertrow ${a.level}`}>
+                  <span className="dot" /><span className="msg">{a.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+      </section>
+
+      {/* Lab trends grid */}
+      <section className="panel labpanel">
+        <div className="head">
+          <h3><Tip text={TIPS.labTrends}>Lab Trends ({d.labs.length} tests)</Tip></h3>
+        </div>
+        <div className="labgrid">
+          {d.labs.map((lab) => <LabCard key={lab.itemid} lab={lab} info={byId[lab.itemid]} />)}
+        </div>
+      </section>
     </>
   );
 }
 
-function Breakdown({ contributions }) {
+function FactorTable({ contributions }) {
   const drivers = contributions.filter((c) => c.points > 0);
   if (drivers.length === 0) {
-    return <div className="placeholder" style={{ marginTop: 0 }}>All labs are within normal range — nothing driving up the risk.</div>;
+    return (
+      <div style={{ padding: "22px 28px" }} className="placeholder small">
+        All labs are within normal range — nothing driving up the risk.
+      </div>
+    );
   }
   return (
-    <div className="breakdown">
-      {drivers.map((c) => {
-        const st = STATUS[c.status] || STATUS.normal;
-        const tr = TREND[c.trend] || TREND.stable;
-        return (
-          <div key={c.itemid} className="brow">
-            <span className="dot" style={{ background: st.color }} />
-            <span className="bname">
-              {GLOSSARY[c.test_name]
-                ? <Tip text={GLOSSARY[c.test_name]}>{c.test_name}</Tip>
-                : c.test_name}
-            </span>
-            <span className="bval">{(+c.latest_value).toPrecision(3) / 1} {c.unit}</span>
-            <span className="bstatus" style={{ color: st.color }}>{st.label}</span>
-            <span className="btrend" style={{ color: tr.color }}>{tr.icon} {tr.label}</span>
-            <span className="bpts">+{c.points}</span>
-          </div>
-        );
-      })}
+    <div className="tablewrap">
+      <table className="factors">
+        <thead>
+          <tr>
+            <th>Indicator</th>
+            <th className="r">Value</th>
+            <th>Status</th>
+            <th>Trend</th>
+            <th className="c">Score Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          {drivers.map((c) => {
+            const st = STATUS[c.status] || STATUS.normal;
+            const tr = TREND[c.trend] || TREND.stable;
+            return (
+              <tr key={c.itemid}>
+                <td className="name">
+                  <span className="lead">
+                    <span className="dot" style={{ background: st.color }} />
+                    {GLOSSARY[c.test_name]
+                      ? <Tip text={GLOSSARY[c.test_name]}>{c.test_name}</Tip>
+                      : c.test_name}
+                  </span>
+                </td>
+                <td className="val">{(+c.latest_value).toPrecision(3) / 1}<span className="unit">{c.unit}</span></td>
+                <td><span className={`statuspill ${c.status}`}>{st.label}</span></td>
+                <td>
+                  <span className={`trendcell ${tr.cls}`}>
+                    <Icon name={tr.icon} />{tr.label}
+                  </span>
+                </td>
+                <td className={`impact ${c.status}`}>+{c.points}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function LabChart({ lab, info }) {
+function LabCard({ lab, info }) {
   const data = lab.points.map((p) => ({ label: fmtTime(p.time), value: p.value }));
   const def = GLOSSARY[lab.test_name];
-  const st = STATUS[info?.status] || STATUS.normal;
-  const title = (
-    <span className="t">
-      {lab.test_name} ({lab.unit})
-      {info && <span className="lstatus" style={{ color: st.color }}> · {st.label}</span>}
-    </span>
-  );
+  const status = info?.status || "normal";
+  const st = STATUS[status] || STATUS.normal;
+  const tr = TREND[info?.trend] || TREND.stable;
+  const latest = lab.points.length ? lab.points[lab.points.length - 1].value : null;
+  const name = `${lab.test_name} (${lab.unit})`;
   return (
-    <div className="lab">
-      {def ? <Tip text={def}>{title}</Tip> : title}
-      <ResponsiveContainer width="100%" height={130}>
-        <LineChart data={data}>
-          <ReferenceArea y1={lab.normal_low} y2={lab.normal_high} fill="#2ea043" fillOpacity={0.12}
-            label={{ value: "normal range", position: "insideTopLeft", fontSize: 9, fill: "#2ea043" }} />
-          <XAxis dataKey="label" hide />
-          <YAxis tick={{ fontSize: 9, fill: "#8b98a5" }} width={32} domain={["auto", "auto"]} />
-          <Tooltip contentStyle={{ background: "#1a2129", border: "1px solid #2a3540", fontSize: 12 }} />
-          <Line type="monotone" dataKey="value" stroke={st.color} strokeWidth={1.5}
-            dot={{ r: 1.5 }} activeDot={{ r: 4 }} />
-        </LineChart>
-      </ResponsiveContainer>
+    <div className={`labcard ${status}`}>
+      <div className="lhead">
+        <span className="lname">{def ? <Tip text={def}>{name}</Tip> : name}</span>
+        <span className="lstat">{st.label}</span>
+      </div>
+      <div className="labbody">
+        <ResponsiveContainer width="100%" height={128}>
+          <LineChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+            <ReferenceArea y1={lab.normal_low} y2={lab.normal_high} fill="#10b981" fillOpacity={0.1} />
+            <XAxis dataKey="label" hide />
+            <YAxis tick={{ fontSize: 9, fill: "#8c909f", fontFamily: "Geist Mono" }} width={30} domain={["auto", "auto"]} />
+            <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6, fontSize: 12 }}
+              labelStyle={{ color: "#c2c6d6" }} />
+            <Line type="monotone" dataKey="value" stroke={st.color} strokeWidth={1.6}
+              dot={{ r: 1.5 }} activeDot={{ r: 4 }} />
+          </LineChart>
+        </ResponsiveContainer>
+        {latest != null && (
+          <div className="latest">
+            {(+latest).toPrecision(3) / 1}
+            {tr.arrow && <span className="arrow">{tr.arrow}</span>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
