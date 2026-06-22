@@ -2,6 +2,9 @@
 
 > A Software Engineering course project exploring how trends in routine laboratory tests can surface early signs of clinical deterioration in hospitalized patients.
 
+**🔴 Live demo:** [deterioration-detector.onrender.com](https://deterioration-detector.onrender.com/)
+*(free Render instance — the first request after idle takes ~30–60s to wake up)*
+
 ---
 
 ## 📌 Project Overview
@@ -27,6 +30,8 @@ A software system that receives patient laboratory time-series data from the **M
 - **Abnormal lab trend detection** — identifies clinically meaningful changes in lab values over time.
 - **Early warning alerts** — flags patients whose trends suggest possible deterioration.
 - **Risk score per patient** — a quantitative score summarizing each patient's deterioration risk.
+- **Early-warning lead time** — quantifies *how many hours ahead* the trend signal fires before the first abnormal flag.
+- **Clinical syndrome detection** — recognizes multi-lab patterns (e.g. kidney, metabolic) rather than treating each lab in isolation.
 - **Dashboard visualization** — an interactive view of trends, alerts, and scores.
 
 ---
@@ -44,6 +49,18 @@ This project uses the **MIMIC-III** clinical database, specifically the `LABEVEN
 | `ITEMID`      | Identifier for the specific laboratory test/measurement.           |
 | `CHARTTIME`   | Timestamp when the measurement was recorded.                       |
 | `VALUENUM`    | Numeric value of the laboratory measurement.                       |
+
+### Scale (full dataset)
+
+The full `LABEVENTS` dump is **~1.8 GB / 27.8M rows**. After filtering to the 8 core labs and cleaning, the system works over:
+
+| Metric | Value |
+|--------|-------|
+| Raw rows streamed | **27,854,055** |
+| Clean measurements kept | **4,615,515** |
+| Distinct patients | **45,411** |
+| Hospital admissions | **57,238** |
+| Core labs tracked | **8** |
 
 > **Note on data access:** MIMIC-III is a restricted-access dataset. Use of the data requires completion of the required training and a signed data use agreement via [PhysioNet](https://physionet.org/content/mimiciii/). **No real patient data is included in this repository.** For convenience, a ~90 MB **fully synthetic** sample (`deterioration-detector/data/sample/LABEVENTS_sample.csv`) is bundled so the system runs end-to-end on a fresh clone with no download — see [Running the Prototype](#-running-the-prototype).
 
@@ -65,6 +82,12 @@ This project uses the **MIMIC-III** clinical database, specifically the `LABEVEN
                   └────────────┬──────────────┘
                                 │  patient lab time-series
                                 ▼
+                  ┌──────────────────────────┐        ┌──────────────────────┐
+                  │   Storage layer           │ ─────▶ │  MotherDuck (cloud)   │
+                  │  (DuckDB / MotherDuck)    │        │   full dataset, 10GB  │
+                  └────────────┬──────────────┘        │   free tier           │
+                                │                       └──────────────────────┘
+                                ▼   (local labs.duckdb fallback)
                   ┌──────────────────────────┐
                   │   2. Trend Analysis &     │
                   │     Abnormality Detection │
@@ -72,51 +95,76 @@ This project uses the **MIMIC-III** clinical database, specifically the `LABEVEN
                                 │  detected trends / anomalies
                                 ▼
                   ┌──────────────────────────┐
-                  │   3. Risk Scoring &       │
-                  │      Alert Engine         │
+                  │   3. Risk Scoring,        │
+                  │   Trajectory, Syndromes,  │
+                  │   Lead-Time & Alerts      │
                   └────────────┬──────────────┘
-                                │  risk scores + alerts
+                                │  risk scores + alerts + evaluation
                                 ▼
                   ┌──────────────────────────┐
                   │   4. Dashboard &          │
                   │      Visualization        │
+                  │   (FastAPI + React)       │
                   └──────────────────────────┘
 ```
 
-The system follows a **pipeline architecture**: data flows from ingestion through analysis and scoring, ending in a visualization layer that presents results to the user.
+The system follows a **pipeline architecture**: data flows from ingestion through analysis and scoring, ending in a visualization layer. A single **storage layer** ([`src/storage/db.py`](deterioration-detector/src/storage/db.py)) is the only thing that touches the database, so the same code runs against the local DuckDB file or the hosted MotherDuck database depending on configuration.
 
 ---
 
 ## 🧩 Main Components
 
-1. **Data Ingestion & Preprocessing**
-   - Loads laboratory records from the `LABEVENTS` table.
-   - Cleans and filters data, handles missing values, and organizes measurements into per-patient time-series.
-
-2. **Trend Analysis & Abnormality Detection**
-   - Computes how each lab value changes over time.
-   - Detects abnormal trends and deviations from expected ranges.
-
-3. **Risk Scoring & Alert Engine**
-   - Aggregates detected trends into a per-patient risk score.
-   - Generates early-warning alerts when risk thresholds are crossed.
-
-4. **Dashboard & Visualization**
-   - Displays lab trends, alerts, and risk scores in an interactive interface for review.
+1. **Data Ingestion & Preprocessing** — streams `LABEVENTS` with DuckDB (no full RAM load), filters to the 8 core labs, drops non-numeric and implausible values, dedupes, and builds a compact analytical database.
+2. **Trend Analysis & Abnormality Detection** — computes how each lab evolves over time and classifies values against reference ranges ([`trends.py`](deterioration-detector/src/analysis/trends.py), [`abnormal.py`](deterioration-detector/src/analysis/abnormal.py)).
+3. **Risk Scoring, Trajectory & Alerts** — aggregates trends into a per-patient risk score, recomputes it at each timestamp to plot a **risk trajectory**, and emits early-warning **alerts** ([`risk_score.py`](deterioration-detector/src/analysis/risk_score.py), [`trajectory.py`](deterioration-detector/src/analysis/trajectory.py), [`alerts.py`](deterioration-detector/src/analysis/alerts.py)).
+4. **Syndrome Detection** — recognizes multi-lab patterns (kidney, metabolic, etc.) rather than treating each lab independently ([`syndromes.py`](deterioration-detector/src/analysis/syndromes.py)).
+5. **Lead-Time Analysis** — quantifies how many hours *ahead* the trend signal fires versus MIMIC's own abnormal `FLAG` — the scientific core of the project ([`lead_time.py`](deterioration-detector/src/analysis/lead_time.py)).
+6. **Detector Evaluation** — scores our anomaly detector against MIMIC's `FLAG` column as ground truth ([`evaluation.py`](deterioration-detector/src/analysis/evaluation.py)).
+7. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
 
 ---
 
-## 👥 Team Responsibilities
+## 🗄️ Data & Hosting
 
-| Member        | Responsibility                                              |
-|---------------|-------------------------------------------------------------|
-| _TBD_         | Data ingestion & preprocessing                              |
-| _TBD_         | Trend analysis & abnormality detection                      |
-| _TBD_         | Risk scoring & alert engine                                 |
-| _TBD_         | Dashboard & visualization                                   |
-| _TBD_         | Documentation, testing & integration                        |
+Because the full dataset is far larger than GitHub's 100 MB file limit, the database is **not** stored in git. Instead the storage layer resolves a connection in this order:
 
-> _Team member names and detailed role assignments will be filled in as the project progresses._
+1. **MotherDuck (cloud)** — if `MOTHERDUCK_TOKEN` is set, the app connects to the hosted `labs` database (cloud DuckDB). This holds the **full 4.6M-row dataset** and is what the live Render deployment uses. The free tier gives 10 GB storage / 10 GB monthly compute.
+2. **Local DuckDB file** — otherwise it falls back to `data/processed/labs.duckdb`, the file produced by `build_db.py` on your machine.
+3. **Bundled sample** — if neither the real CSV nor a built DB is present, `build_db.py` ingests the bundled ~90 MB synthetic sample, so a fresh clone still runs end-to-end.
+
+### Uploading the full dataset to MotherDuck
+
+After building the database locally, push it to the cloud so every clone shares the real data:
+
+```bash
+cd deterioration-detector
+export MOTHERDUCK_TOKEN="<token from MotherDuck UI → Settings → Access Tokens>"
+.venv/bin/python scripts/upload_to_motherduck.py   # pushes every table to the cloud "labs" db
+```
+
+The script is safe to re-run (each table is replaced from the local copy) and prints per-table row counts.
+
+### Configuring the token
+
+The token is a **secret** and is never committed. Set it via a gitignored `.env` file (auto-loaded by the app):
+
+```bash
+cp .env.example .env
+# then edit .env and paste your token:
+#   MOTHERDUCK_TOKEN=...
+```
+
+> ⚠️ **Token expiry:** access tokens can be time-limited. If `/api/stats` suddenly reports small numbers, the token has expired and the app has silently fallen back to the sample — create a new token, then update it both in `.env` and in the Render dashboard's environment variables.
+
+### Verifying which dataset is live
+
+`/api/stats` reports the row/patient/admission counts — the fingerprint that distinguishes the real dataset from the sample:
+
+```bash
+curl -s https://deterioration-detector.onrender.com/api/stats | python3 -m json.tool
+```
+
+`admissions: 57238` (and `kept_rows: 4615515`) confirms the **full cloud dataset** is being served; small numbers mean the sample fallback is in use.
 
 ---
 
@@ -124,12 +172,17 @@ The system follows a **pipeline architecture**: data flows from ingestion throug
 
 | Layer                  | Technology                                   |
 |------------------------|----------------------------------------------|
-| Language               | Python                                       |
-| Ingestion / storage    | **DuckDB** (streams the 1.8 GB CSV, no full RAM load) |
+| Language               | Python 3                                     |
+| Ingestion / storage    | **DuckDB 1.5.3** (streams the 1.8 GB CSV, no full RAM load) |
+| Hosted database        | **MotherDuck** (cloud DuckDB, free tier — full dataset) |
+| Config                 | **python-dotenv** (`.env` for secrets)       |
 | Analysis engine        | Pure Python (`src/analysis`), unit-tested with **pytest** |
 | API                    | **FastAPI** + uvicorn                        |
 | Dashboard / UI         | **React** (Vite) + **Recharts**              |
+| Packaging / deploy     | **Docker** (multi-stage) + **Render** (`render.yaml` blueprint) |
 | Version control / CI   | Git & GitHub + GitHub Actions                |
+
+> DuckDB is pinned to **1.5.3** because MotherDuck does not yet support 1.5.4.
 
 ---
 
@@ -153,9 +206,38 @@ uvicorn src.api.main:app --reload   # API on http://localhost:8000
 cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
 
-> **You only see data after the build steps run** — the database itself is not
-> committed (it's generated). Drop the real `data/raw/LABEVENTS.csv` in place first
-> to run against MIMIC-III instead of the synthetic sample.
+**To run against the full cloud dataset instead of building locally**, set your
+`MOTHERDUCK_TOKEN` (see [Data & Hosting](#-data--hosting)) — `build_risk.py` and the API
+will read from MotherDuck automatically, no local build required.
+
+> **You only see data after the build steps run (or a token is set)** — the database
+> itself is not committed (it's generated). Drop the real `data/raw/LABEVENTS.csv` in
+> place first to build against MIMIC-III instead of the synthetic sample.
+
+### Running with Docker
+
+The repo ships a multi-stage `Dockerfile` (FastAPI serves the built React dashboard and the `/api` routes from one image):
+
+```bash
+docker build -t deterioration-detector .
+docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
+```
+
+### Deploying to Render
+
+[`render.yaml`](render.yaml) is a Render Blueprint — connect the repo to Render and it deploys the Docker image as a free web service (health check on `/api/stats`, auto-deploy on push). Add `MOTHERDUCK_TOKEN` as an environment variable in the Render dashboard so the deployment reads the full cloud dataset.
+
+---
+
+## 🔌 API Endpoints
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /api/stats` | Pipeline scale stats + risk distribution (also the health check). |
+| `GET /api/evaluation` | Detector-vs-MIMIC-`FLAG` accuracy, overall and per-lab. |
+| `GET /api/lead-time` | How many hours ahead the trend signal fires before the first abnormal flag. |
+| `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). |
+| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes. |
 
 ---
 
@@ -185,16 +267,20 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 
 ## 📊 Current Project Status
 
-✅ **Working prototype (Phase B)**
+✅ **Working prototype (Phase B), deployed**
 
 - [x] Defined research question and project scope
 - [x] Identified dataset and key input fields
 - [x] Drafted system architecture and components
 - [x] Set up data access and ingestion pipeline (DuckDB streaming)
 - [x] Implement trend analysis & abnormality detection
-- [x] Implement risk scoring & alert engine
+- [x] Implement risk scoring, trajectory & alert engine
+- [x] Add clinical syndrome detection
+- [x] Add lead-time analysis & detector evaluation vs MIMIC `FLAG`
 - [x] Build dashboard visualization (FastAPI + React)
 - [x] Testing & CI (pytest suite + GitHub Actions running the sample pipeline)
+- [x] Host the full dataset on MotherDuck (cloud DuckDB)
+- [x] Containerize (Docker) and deploy live on Render
 
 ---
 
