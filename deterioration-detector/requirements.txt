@@ -1,5 +1,6 @@
 duckdb==1.5.3  # pinned: MotherDuck does not yet support 1.5.4
 python-dotenv==1.2.2
+openai==2.43.0  # OpenAI client for the dataset Q&A chatbot
 fastapi==0.137.2
 pandas==3.0.3
 pydantic==2.13.4
