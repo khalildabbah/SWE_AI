@@ -71,6 +71,13 @@ const TIPS = {
   kept_rows: "Records left after removing implausible or garbage values.",
   patients: "Number of distinct patients in the dataset.",
   build_seconds: "How long the data-processing pipeline took to run.",
+  rb_ranges: "The normal healthy range for each lab. A value inside this range scores zero; outside it starts adding points.",
+  rb_worsening: "The direction that signals deterioration for this lab — so the trend detector knows which way is dangerous.",
+  rb_classification: "How far outside the normal range a value sits decides whether it's merely abnormal or critical.",
+  rb_scoring: "The exact arithmetic that turns each lab's status and trend into the patient's overall risk score.",
+  rb_categories: "The score cut-points that map a total into the Low / Medium / High triage category.",
+  rb_syndromes: "Named clinical patterns that fire when several labs move together — each backed by a consensus definition.",
+  rb_source: "The published source this rule is based on. Click to open it; hover for the full citation.",
 };
 
 // A small reusable hover tooltip with a dotted underline cue.
@@ -181,7 +188,8 @@ export default function App() {
             <Icon name="schedule" /><span>Early Warning</span></a>
           <a className={page === "evaluation" ? "active" : ""} onClick={() => setPage("evaluation")}>
             <Icon name="fact_check" /><span>Detector Accuracy</span></a>
-          <a><Icon name="warning" /><span>Risk Alerts</span></a>
+          <a className={page === "rules" ? "active" : ""} onClick={() => setPage("rules")}>
+            <Icon name="menu_book" /><span>Scoring Rule Book</span></a>
         </nav>
 
         <div className="explorer">
@@ -256,6 +264,7 @@ export default function App() {
               {page === "monitoring" ? "Patient Monitoring"
                 : page === "evaluation" ? "Detector Accuracy"
                 : page === "leadtime" ? "Early Warning"
+                : page === "rules" ? "Scoring Rule Book"
                 : "Deterioration Watch"}
             </span>
           </div>
@@ -272,6 +281,8 @@ export default function App() {
             <Evaluation />
           ) : page === "leadtime" ? (
             <LeadTime />
+          ) : page === "rules" ? (
+            <RuleBook />
           ) : (
             <>
               {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
@@ -752,6 +763,233 @@ function LeadTime() {
           fires earlier. This gap is exactly the motivation for a learned risk model
           that can read the trend before any single value turns critical.
         </div>
+      </section>
+    </>
+  );
+}
+
+// ── Scoring Rule Book: the transparent, cited logic behind every score ──
+const WORSE_RULE = {
+  high: { arrow: "↑", text: "Rising is dangerous" },
+  low: { arrow: "↓", text: "Falling is dangerous" },
+  both: { arrow: "↕", text: "Either direction is dangerous" },
+};
+const DIR_ARROW = { high: "↑ above range", low: "↓ below range" };
+
+function RuleBook() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/rules")
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.detail || "error"); return j; }))
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  if (error) return <div className="placeholder err">{error}</div>;
+  if (!data) return <div className="placeholder">Loading rule book…</div>;
+
+  const src = data.sources;
+  // A cited-source pill: links out when a URL exists, tooltip shows full citation.
+  const Source = ({ id }) => {
+    const s = src[id];
+    if (!s) return null;
+    const inner = (
+      <span className={`rbsrc ${id === "engine" ? "engine" : ""}`}>
+        <Icon name={s.url ? "menu_book" : "tune"} />{s.label}
+      </span>
+    );
+    const body = <Tip text={s.citation}>{inner}</Tip>;
+    return s.url
+      ? <a className="rbsrclink" href={s.url} target="_blank" rel="noreferrer" title={TIPS.rb_source}>{body}</a>
+      : body;
+  };
+
+  const used = Object.keys(src).filter((id) =>
+    data.ranges.some((r) => r.range_source === id || r.clinical_source === id) ||
+    data.syndromes.some((s) => s.source === id) ||
+    data.scoring.steps.some((s) => s.source === id) ||
+    data.classification.source === id);
+
+  return (
+    <>
+      {/* Intro */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3>How every score is decided</h3>
+            <div className="desc">
+              This project is a transparent rule engine, not a black box. Every page
+              here — the risk score, the alerts, the syndromes — is driven by the
+              rules below. Each is tagged with the published source it's based on.
+            </div>
+          </div>
+        </div>
+        <div className="evalnote"><Icon name="info" />{data.disclaimer}</div>
+      </section>
+
+      {/* Reference ranges */}
+      <section className="panel factortable">
+        <div className="head">
+          <h3><Tip text={TIPS.rb_ranges}>1 · Reference Ranges</Tip></h3>
+          <div className="note"><Icon name="science" />The normal range for each lab</div>
+        </div>
+        <div className="tablewrap">
+          <table className="factors">
+            <thead>
+              <tr>
+                <th>Lab</th>
+                <th className="r">Normal range</th>
+                <th><Tip text={TIPS.rb_worsening}>Worsening direction</Tip></th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.ranges.map((r) => {
+                const w = WORSE_RULE[r.worsening] || WORSE_RULE.both;
+                return (
+                  <tr key={r.itemid}>
+                    <td className="name">
+                      <span className="lead">
+                        {GLOSSARY[r.name] ? <Tip text={GLOSSARY[r.name]}>{r.name}</Tip> : r.name}
+                      </span>
+                    </td>
+                    <td className="val">{r.normal_low}–{r.normal_high}<span className="unit">{r.unit}</span></td>
+                    <td>
+                      <span className="rbdir"><span className="arr">{w.arrow}</span>{w.text}</span>
+                    </td>
+                    <td><div className="rbsrcs"><Source id={r.range_source} /><Source id={r.clinical_source} /></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Classification → points */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.rb_classification}>2 · Classifying a value</Tip></h3>
+            <div className="desc">{data.classification.rule}</div>
+          </div>
+          <Source id={data.classification.source} />
+        </div>
+        <div className="rbbands">
+          {data.classification.bands.map((b) => (
+            <div key={b.status} className={`rbband ${b.status}`}>
+              <div className="rbhead">
+                <span className={`statuspill ${b.status}`}>{b.label}</span>
+                <span className="rbpts">+{b.points}<span className="u">pts</span></span>
+              </div>
+              <div className="rbtest">{b.test}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Scoring math */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.rb_scoring}>3 · Building the score</Tip></h3>
+            <div className="desc">
+              How each lab's status and trend add up. Trend uses a {data.scoring.trend_window}-point window.
+            </div>
+          </div>
+        </div>
+        <ol className="rbsteps">
+          {data.scoring.steps.map((s, i) => (
+            <li key={i}>
+              <span className="rbstepn">{i + 1}</span>
+              <div className="rbstepbody">
+                <div className="rbsteptop"><b>{s.name}</b><Source id={s.source} /></div>
+                <div className="rbstepd">{s.detail}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* Risk categories */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.rb_categories}>4 · Risk categories</Tip></h3>
+            <div className="desc">The total score maps to a triage category.</div>
+          </div>
+        </div>
+        <div className="rbcats">
+          {data.categories.map((c) => (
+            <div key={c.category} className={`rbcat ${c.category}`}>
+              <span className={`chip ${c.category}`}>{c.category}</span>
+              <div className="rbrange">
+                {c.max == null ? `${c.min}+` : c.min === c.max ? `${c.min}` : `${c.min}–${c.max}`}
+                <span className="u">pts</span>
+              </div>
+              <div className="rbmeaning">{c.meaning}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Syndromes */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3><Tip text={TIPS.rb_syndromes}>5 · Clinical syndromes</Tip></h3>
+            <div className="desc">
+              Named patterns that fire when enough signal labs move together.
+            </div>
+          </div>
+        </div>
+        <div className="rbsyngrid">
+          {data.syndromes.map((s) => (
+            <div key={s.key} className="rbsyn">
+              <div className="rbsynhead">
+                <span className="name">{s.name}</span>
+                <Source id={s.source} />
+              </div>
+              <div className="rbsynplain">{s.plain}</div>
+              <div className="rbsynsignals">
+                {s.signals.map((sig) => (
+                  <span key={sig.itemid} className="rbsig">
+                    {GLOSSARY[sig.name] ? <Tip text={GLOSSARY[sig.name]}>{sig.name}</Tip> : sig.name}
+                    <span className="d">{DIR_ARROW[sig.direction]}</span>
+                  </span>
+                ))}
+              </div>
+              <div className="rbsynfoot">
+                <Icon name="rule" />Fires when ≥ {s.min_signals} of {s.signals.length} present
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Sources */}
+      <section className="panel section">
+        <div className="head">
+          <div>
+            <h3>Sources</h3>
+            <div className="desc">The published references behind the rules above.</div>
+          </div>
+        </div>
+        <ul className="rbsources">
+          {used.map((id) => {
+            const s = src[id];
+            return (
+              <li key={id}>
+                <span className="rblabel">{s.label}</span>
+                <span className="rbcite">{s.citation}</span>
+                {s.url && <a href={s.url} target="_blank" rel="noreferrer" className="rbopen">
+                  <Icon name="open_in_new" />Open</a>}
+              </li>
+            );
+          })}
+        </ul>
       </section>
     </>
   );
