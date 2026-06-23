@@ -3,6 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceArea, ReferenceLine, Area, AreaChart, CartesianGrid,
 } from "recharts";
+import Chatbot from "./Chatbot.jsx";
 
 // Clinical palette (mirrors styles.css tokens) for chart strokes/fills.
 const RISK_COLOR = { Low: "#10b981", Medium: "#f59e0b", High: "#ef4444" };
@@ -287,6 +288,9 @@ export default function App() {
           <div className="seg">STATION: 4B-NC-01 · CLINICIAN: DR. SMITH</div>
         </footer>
       </main>
+
+      {/* Floating dataset assistant (bottom-right) */}
+      <Chatbot />
     </div>
   );
 }
