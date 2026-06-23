@@ -19,6 +19,7 @@ from src.analysis.trajectory import compute_trajectory
 from src.analysis.syndromes import detect_syndromes
 from src.analysis.evaluation import confusion_metrics
 from src.analysis.lead_time import compute_lead_time
+from src.analysis.rules import build_rules
 from src.ingestion.lab_dictionary import LAB_DEFS
 from src.api.chat import router as chat_router
 
@@ -73,6 +74,17 @@ def evaluation():
                  "differ from each lab's originating reference interval — "
                  "informative, not clinical validation."),
     }
+
+
+@app.get("/api/rules")
+def rules():
+    """
+    The transparent rule book behind every score: reference ranges, the
+    normal/abnormal/critical banding, the point math, the Low/Medium/High
+    cut-points, and the syndrome definitions — each tagged with a published
+    source. Derived live from the scoring engine so it can never drift.
+    """
+    return build_rules()
 
 
 @app.get("/api/lead-time")

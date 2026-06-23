@@ -32,6 +32,7 @@ A software system that receives patient laboratory time-series data from the **M
 - **Risk score per patient** — a quantitative score summarizing each patient's deterioration risk.
 - **Early-warning lead time** — quantifies *how many hours ahead* the trend signal fires before the first abnormal flag.
 - **Clinical syndrome detection** — recognizes multi-lab patterns (e.g. kidney, metabolic) rather than treating each lab in isolation.
+- **Cited scoring rule book** — a transparent, source-referenced explanation of exactly how every score is decided.
 - **Dashboard visualization** — an interactive view of trends, alerts, and scores.
 
 ---
@@ -120,7 +121,8 @@ The system follows a **pipeline architecture**: data flows from ingestion throug
 4. **Syndrome Detection** — recognizes multi-lab patterns (kidney, metabolic, etc.) rather than treating each lab independently ([`syndromes.py`](deterioration-detector/src/analysis/syndromes.py)).
 5. **Lead-Time Analysis** — quantifies how many hours *ahead* the trend signal fires versus MIMIC's own abnormal `FLAG` — the scientific core of the project ([`lead_time.py`](deterioration-detector/src/analysis/lead_time.py)).
 6. **Detector Evaluation** — scores our anomaly detector against MIMIC's `FLAG` column as ground truth ([`evaluation.py`](deterioration-detector/src/analysis/evaluation.py)).
-7. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
+7. **Scoring Rule Book** — a transparent, source-cited summary of how every score is decided, assembled *live* from the scoring engine's own constants so it can never drift from the code ([`rules.py`](deterioration-detector/src/analysis/rules.py)).
+8. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
 
 ---
 
@@ -236,6 +238,7 @@ docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
 | `GET /api/stats` | Pipeline scale stats + risk distribution (also the health check). |
 | `GET /api/evaluation` | Detector-vs-MIMIC-`FLAG` accuracy, overall and per-lab. |
 | `GET /api/lead-time` | How many hours ahead the trend signal fires before the first abnormal flag. |
+| `GET /api/rules` | The cited scoring rule book: reference ranges, classification bands, point math, risk categories, and syndrome definitions, each tagged with a published source. |
 | `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). |
 | `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes. |
 
@@ -263,6 +266,19 @@ docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
 
 > Reference ranges are generic adult values from [`lab_dictionary.py`](deterioration-detector/src/ingestion/lab_dictionary.py), for this educational prototype only — **not** clinical advice.
 
+### 📖 Scoring Rule Book
+
+The **Scoring Rule Book** tab is the dashboard's "show your work" page. Because this team isn't clinical, it makes every number in the app traceable — nothing is a black box. It walks through, in plain language:
+
+1. **Reference ranges** — the normal range for each of the 8 labs and which direction signals deterioration.
+2. **Classifying a value** — inside the range = *normal* (0 pts); just outside = *abnormal* (+1); more than half the range-width beyond = *critical* (+2).
+3. **Building the score** — sum every lab's points, plus +1 if a lab is trending the wrong way *while already* out of range.
+4. **Risk categories** — total **0–2 = Low**, **3–5 = Medium**, **6+ = High**.
+5. **Clinical syndromes** — the named multi-lab patterns and how many signals must line up for each to fire.
+6. **Sources** — every rule is tagged with a published reference (NEJM laboratory reference values, KDIGO, Sepsis-3, NEWS2). The parts that are this prototype's own scaling choices are honestly labelled *"engine heuristic,"* not attributed to a guideline.
+
+The page is served by [`GET /api/rules`](#-api-endpoints), assembled **live from the scoring engine's own constants** ([`rules.py`](deterioration-detector/src/analysis/rules.py)) — so what you read can never drift from the code that actually scores patients.
+
 ---
 
 ## 📊 Current Project Status
@@ -277,6 +293,7 @@ docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
 - [x] Implement risk scoring, trajectory & alert engine
 - [x] Add clinical syndrome detection
 - [x] Add lead-time analysis & detector evaluation vs MIMIC `FLAG`
+- [x] Add a cited scoring rule book (source-referenced, derived live from the engine)
 - [x] Build dashboard visualization (FastAPI + React)
 - [x] Testing & CI (pytest suite + GitHub Actions running the sample pipeline)
 - [x] Host the full dataset on MotherDuck (cloud DuckDB)
