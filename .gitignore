@@ -9,6 +9,9 @@ deterioration-detector/data/processed/
 !deterioration-detector/data/sample/
 !deterioration-detector/data/sample/*.csv
 
+# ...and the small named-lab catalog that powers the Pattern Builder pick-list
+!deterioration-detector/data/lab_catalog.csv
+
 # Python
 .venv/
 venv/
