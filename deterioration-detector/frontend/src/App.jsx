@@ -191,7 +191,7 @@ export default function App() {
             <Icon name="fact_check" /><span>Detector Accuracy</span></a>
           <a className={page === "rules" ? "active" : ""} onClick={() => setPage("rules")}>
             <Icon name="menu_book" /><span>Scoring Rule Book</span></a>
-          <a className={page === "builder" ? "active" : ""} onClick={() => setPage("builder")}>
+          <a className={`navbuilder ${page === "builder" ? "active" : ""}`} onClick={() => setPage("builder")}>
             <Icon name="construction" /><span>Pattern Builder</span></a>
         </nav>
 

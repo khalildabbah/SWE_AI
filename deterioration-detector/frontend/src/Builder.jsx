@@ -22,7 +22,7 @@ const Icon = ({ name, className = "" }) => (
 );
 
 const STEPS = [
-  { n: 1, label: "Choose syndrome", icon: "label" },
+  { n: 1, label: "Choose Disease", icon: "label" },
   { n: 2, label: "Co-research", icon: "travel_explore" },
   { n: 3, label: "Chosen patterns", icon: "checklist" },
 ];
@@ -265,7 +265,7 @@ export default function Builder() {
 
   async function deleteSyndrome(key, e) {
     e.stopPropagation();
-    if (!window.confirm("Delete this saved syndrome?")) return;
+    if (!window.confirm("Delete this saved pattern?")) return;
     await fetch(`/api/builder/syndromes/${key}`, { method: "DELETE" }).catch(() => {});
     if (key === currentKey) setCurrentKey(null);
     loadSaved();
@@ -309,7 +309,7 @@ export default function Builder() {
     <div className="bld">
       <div className="bldintro">
         <h2><Icon name="construction" /> Pattern Builder</h2>
-        <p>Build an evidence-based syndrome in three steps: name it, co-research the
+        <p>Build an evidence-based pattern in three steps: name the disease or syndrome, co-research the
           pattern rules with the AI (it searches real literature and summarises it here),
           then review and try the rule set on real patient data. Educational prototype — not medical advice.</p>
       </div>
@@ -333,11 +333,11 @@ export default function Builder() {
       {step === 1 && (
         <div className="bldstage">
           <div className="bldcard">
-            <h3>1 · Which syndrome do you want to build?</h3>
-            <p className="bldlede">Give it a name (it can be a known syndrome or a candidate
-              you're investigating). You can refine everything later.</p>
+            <h3>1 · Which disease or possible syndrome do you want to investigate?</h3>
+            <p className="bldlede">Give it a name — a disease, a syndrome, or any candidate
+              condition you're investigating. You can refine everything later.</p>
             <div className="bldfield">
-              <label>Syndrome name</label>
+              <label>Disease / syndrome name</label>
               <input value={name} onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Hepatorenal Syndrome"
                 onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) go(2); }} autoFocus />
@@ -350,7 +350,7 @@ export default function Builder() {
             <div className="bldfield">
               <label>Working description <span className="bldopt">(optional)</span></label>
               <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)}
-                placeholder="What is this syndrome, and what are you trying to capture?" />
+                placeholder="What is this disease or syndrome, and what are you trying to capture?" />
             </div>
             <div className="bldnav">
               <span />
@@ -362,7 +362,7 @@ export default function Builder() {
 
           {saved.length > 0 && (
             <div className="bldcard">
-              <h3>…or resume a saved syndrome</h3>
+              <h3>…or resume a saved pattern</h3>
               <ul className="bldsaved">
                 {saved.map((s) => (
                   <li key={s.key} onClick={() => loadSyndrome(s)}>
@@ -557,7 +557,7 @@ export default function Builder() {
 
             <div className="bldactions">
               <button className="bldprimary" onClick={saveSyndrome} disabled={!name.trim() || !rules.length}>
-                <Icon name="save" />{currentKey ? "Update" : "Save"} syndrome
+                <Icon name="save" />{currentKey ? "Update" : "Save"} pattern
               </button>
               <button className="bldsecondary" onClick={runOnData} disabled={!rules.length || runLoading}>
                 <Icon name="science" />{runLoading ? "Running…" : "Run on patient data"}
