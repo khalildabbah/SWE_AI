@@ -30,7 +30,9 @@ from pydantic import BaseModel
 from src.storage.db import connect
 from src.analysis.custom_syndromes import (
     available_labs, list_custom, save_custom, delete_custom, run_on_cohort,
+    resolve_lab,
 )
+from src.analysis.lab_catalog import load_catalog
 from src.ingestion.lab_dictionary import LAB_DEFS
 
 router = APIRouter(prefix="/api/builder")
@@ -50,13 +52,18 @@ educational patient-deterioration prototype. The user is naming a candidate
 syndrome and wants to agree with you on a small set of evidence-based PATTERN
 RULES that, taken together, suggest that syndrome from blood-lab values.
 
-This dataset measures ONLY these 8 labs — a rule can only be tried on patient
-data if it uses one of them:
+You may propose patterns over ANY blood lab that the evidence supports — you are
+NOT limited to a fixed list. Be guided by the literature for the syndrome.
+
+One thing to be transparent about: this prototype's patient dataset currently
+contains only these 8 labs, so only patterns over them can be TESTED on patient
+data right now. Patterns over any other lab are still valuable and are saved as
+"research-only":
 {_LAB_LINES}
 
-Each pattern rule is exactly: ONE of those labs, moving in ONE direction
+Each pattern rule is exactly: ONE lab, moving in ONE direction
 ("high" = above normal range, "low" = below normal range), with a short plain
-rationale and a real citation.
+rationale, an inline evidence synopsis, and a real citation.
 
 HOW TO WORK:
 - Use the web_search tool to ground every proposal in actual literature
@@ -72,16 +79,17 @@ HOW TO WORK:
   rules, ALSO emit a fenced ```json block (and nothing else inside the fences)
   with this exact shape:
   {{"proposals": [
-     {{"itemid": <one of the 8 itemids>, "lab": "<lab name>",
-       "direction": "high"|"low", "rationale": "<one sentence, plain>",
+     {{"lab": "<lab name>", "itemid": <real itemid if it is one of the 8 above,
+       else null>, "direction": "high"|"low", "rationale": "<one sentence, plain>",
        "evidence": "<2-4 sentence synopsis of what the source says, so the user
                      can decide here without opening the link>",
        "citation": {{"title": "<source title>", "url": "<real url>"}}}}
   ]}}
-- Only put a lab in "proposals" if it is one of the 8 above (use its real
-  itemid). If the literature points to a lab we do NOT track (e.g. bilirubin,
-  glucose), mention it in prose as a limitation but DO NOT put it in the JSON.
-- Keep proposals focused (typically 2-4 rules). Do not invent citations; if you
+- ALWAYS set "lab" to the lab's name. Set "itemid" to the matching id ONLY when
+  the lab is one of the 8 above; otherwise use null (it becomes a research-only
+  pattern). Do propose important non-dataset labs (e.g. bilirubin, glucose,
+  platelets) when the evidence calls for them — just leave their itemid null.
+- Keep proposals focused (typically 2-5 rules). Do not invent citations; if you
   could not find a source, say so and omit that rule from the JSON.
 - This is an educational tool, not medical advice. Never give diagnosis or
   treatment guidance for an individual.
@@ -101,7 +109,8 @@ class ResearchRequest(BaseModel):
 
 
 class SignalIn(BaseModel):
-    itemid: int
+    itemid: int | None = None   # None for research-only labs not in the dataset
+    name: str = ""
     direction: str
     rationale: str = ""
     evidence: str = ""
@@ -125,8 +134,22 @@ class RunRequest(BaseModel):
 
 @router.get("/labs")
 def labs():
-    """The 8 labs a custom rule can be built from."""
+    """The 8 labs that are testable on patient data (have reference ranges)."""
     return {"labs": available_labs()}
+
+
+@router.get("/catalog")
+def catalog():
+    """Every named lab in the source extract — the Pattern Builder pick-list.
+    `testable=true` means the system tracks it and it can be run on patient data;
+    the rest are selectable as research-only patterns."""
+    labs = load_catalog()
+    return {
+        "labs": labs,
+        "n": len(labs),
+        "n_testable": sum(1 for l in labs if l["testable"]),
+        "categories": sorted({l["category"] for l in labs if l["category"]}),
+    }
 
 
 @router.get("/syndromes")
@@ -177,7 +200,6 @@ def _extract_proposals(text: str) -> tuple[str, list[dict]]:
     Returns (prose_without_block, proposals). Tolerant of a missing/broken
     block — proposals just come back empty and the prose is shown as-is.
     """
-    valid = set(LAB_DEFS.keys())
     proposals: list[dict] = []
     prose = text
 
@@ -187,18 +209,19 @@ def _extract_proposals(text: str) -> tuple[str, list[dict]]:
         except json.JSONDecodeError:
             continue
         for p in data.get("proposals", []) or []:
-            try:
-                itemid = int(p.get("itemid"))
-            except (TypeError, ValueError):
-                continue
             direction = str(p.get("direction", "")).lower()
-            if itemid not in valid or direction not in ("high", "low"):
+            if direction not in ("high", "low"):
+                continue
+            name_in = p.get("lab") or p.get("name") or ""
+            itemid, name, in_dataset = resolve_lab(p.get("itemid"), name_in)
+            if itemid is None and not name:
                 continue
             cite = p.get("citation") or {}
             proposals.append({
                 "itemid": itemid,
-                "name": LAB_DEFS[itemid].name,
+                "name": name,
                 "direction": direction,
+                "in_dataset": in_dataset,
                 "rationale": (p.get("rationale") or "").strip(),
                 "evidence": (p.get("evidence") or "").strip(),
                 "citation": {
@@ -208,10 +231,10 @@ def _extract_proposals(text: str) -> tuple[str, list[dict]]:
             })
         prose = prose.replace(m.group(0), "").strip()
 
-    # de-dupe by (itemid, direction); first proposal wins
+    # de-dupe by (itemid or lowercased name, direction); first proposal wins
     seen, unique = set(), []
     for p in proposals:
-        k = (p["itemid"], p["direction"])
+        k = (p["itemid"] if p["itemid"] is not None else p["name"].lower(), p["direction"])
         if k not in seen:
             seen.add(k)
             unique.append(p)
