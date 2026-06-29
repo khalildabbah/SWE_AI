@@ -31,7 +31,7 @@ app.add_middleware(
 
 # Grounded dataset Q&A chatbot (OpenAI) — POST /api/chat
 app.include_router(chat_router)
-# Syndrome Builder: AI-assisted, web-searched custom syndromes — /api/builder/*
+# Pattern Builder: AI-assisted, web-searched custom syndromes — /api/builder/*
 app.include_router(builder_router)
 
 

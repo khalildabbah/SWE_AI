@@ -1,7 +1,7 @@
 """
-SYNDROME BUILDER API
-====================
-Backs the "Syndrome Builder" tab, where a researcher names a candidate syndrome
+PATTERN BUILDER API
+===================
+Backs the "Pattern Builder" tab, where a researcher names a candidate syndrome
 and co-works with an AI to agree on CITED pattern rules over the 8 tracked labs,
 then tries the rule set on real patient data.
 
@@ -45,7 +45,7 @@ _LAB_LINES = "\n".join(
 )
 
 SYSTEM_PROMPT = f"""\
-You are a clinical-research co-pilot inside the "Syndrome Builder" of an
+You are a clinical-research co-pilot inside the "Pattern Builder" of an
 educational patient-deterioration prototype. The user is naming a candidate
 syndrome and wants to agree with you on a small set of evidence-based PATTERN
 RULES that, taken together, suggest that syndrome from blood-lab values.
@@ -62,12 +62,20 @@ HOW TO WORK:
 - Use the web_search tool to ground every proposal in actual literature
   (guidelines, review articles, primary studies). Prefer authoritative sources
   (e.g. KDIGO, Sepsis-3, NEWS2, major journals). Cite what you actually found.
+- BRING THE EVIDENCE INTO THE CHAT. The user should be able to read, understand
+  and decide WITHOUT leaving this page to open the links. For every source you
+  rely on, give a concise synopsis in your prose (2-4 sentences of what it
+  actually says, with a short quoted finding when it helps), and put that same
+  synopsis in each proposal's "evidence" field. The citation/link is for
+  provenance only — never make the user click out to follow your reasoning.
 - Discuss with the user in clear, concise prose. When you propose or revise
   rules, ALSO emit a fenced ```json block (and nothing else inside the fences)
   with this exact shape:
   {{"proposals": [
      {{"itemid": <one of the 8 itemids>, "lab": "<lab name>",
        "direction": "high"|"low", "rationale": "<one sentence, plain>",
+       "evidence": "<2-4 sentence synopsis of what the source says, so the user
+                     can decide here without opening the link>",
        "citation": {{"title": "<source title>", "url": "<real url>"}}}}
   ]}}
 - Only put a lab in "proposals" if it is one of the 8 above (use its real
@@ -96,6 +104,7 @@ class SignalIn(BaseModel):
     itemid: int
     direction: str
     rationale: str = ""
+    evidence: str = ""
     citation: dict = {}
 
 
@@ -191,6 +200,7 @@ def _extract_proposals(text: str) -> tuple[str, list[dict]]:
                 "name": LAB_DEFS[itemid].name,
                 "direction": direction,
                 "rationale": (p.get("rationale") or "").strip(),
+                "evidence": (p.get("evidence") or "").strip(),
                 "citation": {
                     "title": (cite.get("title") or "").strip(),
                     "url": (cite.get("url") or "").strip(),

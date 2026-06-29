@@ -1,7 +1,7 @@
 """
 USER-BUILT (CUSTOM) SYNDROMES
 =============================
-The "Syndrome Builder" tab lets a researcher/clinician name a candidate syndrome
+The "Pattern Builder" tab lets a researcher/clinician name a candidate syndrome
 and agree, with an AI co-worker that searches the literature, on a set of CITED
 pattern rules over the 8 tracked labs. Those saved definitions live here.
 
@@ -100,6 +100,7 @@ def _clean_signals(signals: list[dict]) -> list[dict]:
             "name": LAB_DEFS[itemid].name,
             "direction": direction,
             "rationale": (s.get("rationale") or "").strip(),
+            "evidence": (s.get("evidence") or "").strip(),
             "citation": {
                 "title": (s.get("citation", {}) or {}).get("title", "").strip(),
                 "url": (s.get("citation", {}) or {}).get("url", "").strip(),
