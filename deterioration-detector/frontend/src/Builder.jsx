@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 /*
  * PATTERN BUILDER ("build it yourself")
@@ -73,7 +73,7 @@ function Citation({ citation }) {
 export default function Builder() {
   const [step, setStep] = useState(1);
 
-  const [catalog, setCatalog] = useState([]); // {itemid,label,category,units,testable,n_rows}
+  const [labs, setLabs] = useState([]);
   const [saved, setSaved] = useState([]);
 
   const [name, setName] = useState("");
@@ -90,24 +90,17 @@ export default function Builder() {
   const bodyRef = useRef(null);
   const kickedOff = useRef(false);
 
-  // manual add (lab pick-list) + actions
-  const [pickQuery, setPickQuery] = useState("");
-  const [picked, setPicked] = useState(null);   // chosen catalog lab
-  const [pickOpen, setPickOpen] = useState(false);
+  // manual add + actions
+  const [pickLab, setPickLab] = useState("");
   const [pickDir, setPickDir] = useState("high");
   const [saveMsg, setSaveMsg] = useState(null);
   const [run, setRun] = useState(null);
   const [runLoading, setRunLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/builder/catalog").then((r) => r.json()).then((d) => {
-      if (d.labs && d.labs.length) { setCatalog(d.labs); return; }
-      // fall back to the tracked 8 if the catalog export isn't present
-      fetch("/api/builder/labs").then((r) => r.json()).then((x) =>
-        setCatalog((x.labs || []).map((l) => ({
-          itemid: l.itemid, label: l.name, category: "Tracked",
-          units: l.unit, n_rows: 0, testable: true,
-        }))));
+    fetch("/api/builder/labs").then((r) => r.json()).then((d) => {
+      setLabs(d.labs || []);
+      if (d.labs?.length) setPickLab(String(d.labs[0].itemid));
     }).catch(() => {});
     loadSaved();
   }, []);
@@ -126,7 +119,7 @@ export default function Builder() {
     if (step === 2 && !kickedOff.current && messages.length === 0 && name.trim()) {
       kickedOff.current = true;
       send(`Let's build lab-based pattern rules for "${name.trim()}". Search the `
-        + `literature and propose pattern rules (a lab + a direction) — summarise the `
+        + `literature and propose rules over the 8 available labs — summarise the `
         + `key evidence here so I can decide without leaving the page.`);
     }
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -136,23 +129,16 @@ export default function Builder() {
       .then((d) => setSaved(d.items || [])).catch(() => {});
   }
 
-  // testable (tracked) labs, keyed by lowercased label, for resolving names
-  const testableByName = useMemo(() => Object.fromEntries(
-    catalog.filter((l) => l.testable).map((l) => [l.label.toLowerCase(), l])), [catalog]);
-  // identity tolerant of research-only labs (itemid is null): fall back to name
-  const ruleKey = (r) =>
-    `${r.itemid != null ? `id:${r.itemid}` : `nm:${(r.name || "").toLowerCase()}`}-${r.direction}`;
-  const hasRule = (rule) => rules.some((r) => ruleKey(r) === ruleKey(rule));
+  const labById = Object.fromEntries(labs.map((l) => [l.itemid, l]));
+  const hasRule = (itemid, direction) =>
+    rules.some((r) => r.itemid === itemid && r.direction === direction);
 
   function addRule(rule) {
-    if (hasRule(rule)) return;
-    // resolve dataset membership locally when the caller didn't specify it
-    const known = rule.itemid != null ? null : testableByName[(rule.name || "").toLowerCase()];
+    if (hasRule(rule.itemid, rule.direction)) return;
     setRules((rs) => [...rs, {
-      itemid: rule.itemid != null ? rule.itemid : (known ? known.itemid : null),
-      name: rule.name || (known ? known.label : ""),
+      itemid: rule.itemid,
+      name: rule.name || labById[rule.itemid]?.name || `Lab ${rule.itemid}`,
       direction: rule.direction,
-      in_dataset: rule.in_dataset != null ? rule.in_dataset : (rule.itemid != null || !!known),
       rationale: rule.rationale || "",
       evidence: rule.evidence || "",
       citation: rule.citation || { title: "", url: "" },
@@ -160,38 +146,15 @@ export default function Builder() {
     setRun(null);
   }
 
-  function removeRule(rule) {
-    setRules((rs) => rs.filter((r) => ruleKey(r) !== ruleKey(rule)));
+  function removeRule(itemid, direction) {
+    setRules((rs) => rs.filter((r) => !(r.itemid === itemid && r.direction === direction)));
     setRun(null);
   }
 
-  // matches for the lab pick-list (label or category contains the query)
-  const pickMatches = useMemo(() => {
-    const s = pickQuery.trim().toLowerCase();
-    const list = s
-      ? catalog.filter((l) => l.label.toLowerCase().includes(s) || l.category.toLowerCase().includes(s))
-      : catalog;
-    return list.slice(0, 40);
-  }, [pickQuery, catalog]);
-
-  function choosePick(l) {
-    setPicked(l); setPickQuery(l.label); setPickOpen(false);
-  }
-
   function addManual() {
-    // a clicked catalog lab, else an exact-label match on what was typed
-    const lab = (picked && picked.label.toLowerCase() === pickQuery.trim().toLowerCase())
-      ? picked
-      : catalog.find((l) => l.label.toLowerCase() === pickQuery.trim().toLowerCase());
-    if (lab) {
-      addRule({ itemid: lab.testable ? lab.itemid : null, name: lab.label,
-                direction: pickDir, in_dataset: lab.testable });
-    } else {
-      const typed = pickQuery.trim();
-      if (!typed) return;
-      addRule({ itemid: null, name: typed, direction: pickDir, in_dataset: false });
-    }
-    setPickQuery(""); setPicked(null); setPickOpen(false);
+    const itemid = Number(pickLab);
+    if (!itemid) return;
+    addRule({ itemid, direction: pickDir, name: labById[itemid]?.name });
   }
 
   async function send(text) {
@@ -252,8 +215,7 @@ export default function Builder() {
     setDescription(s.description || "");
     setCurrentKey(s.key);
     setRules((s.signals || []).map((sg) => ({
-      itemid: sg.itemid != null ? sg.itemid : null, name: sg.name, direction: sg.direction,
-      in_dataset: sg.in_dataset != null ? sg.in_dataset : sg.itemid != null,
+      itemid: sg.itemid, name: sg.name, direction: sg.direction,
       rationale: sg.rationale || "", evidence: sg.evidence || "",
       citation: sg.citation || { title: "", url: "" },
     })));
@@ -301,7 +263,7 @@ export default function Builder() {
 
   const SUGGESTIONS = name.trim() ? [
     `What lab patterns point to ${name.trim()}?`,
-    `Which lab values are most specific to ${name.trim()}?`,
+    `Which of our 8 labs are most specific to ${name.trim()}?`,
     `Summarise the evidence and propose pattern rules for ${name.trim()}.`,
   ] : [];
 
@@ -417,14 +379,11 @@ export default function Builder() {
                       <div className="bldprops">
                         <div className="bldprops-h">Proposed patterns</div>
                         {m.proposals.map((p, j) => {
-                          const added = hasRule(p);
+                          const added = hasRule(p.itemid, p.direction);
                           return (
                             <div key={j} className="bldprop">
                               <div className="bldprop-main">
-                                <span className="bldpillwrap">
-                                  <span className={`bldpill ${p.direction}`}>{p.name} {dirLabel(p.direction)}</span>
-                                  {!p.in_dataset && <span className="bldtag-ro" title="This lab isn't in the dataset — saved for research, can't be tested on patient data">research-only</span>}
-                                </span>
+                                <span className={`bldpill ${p.direction}`}>{p.name} {dirLabel(p.direction)}</span>
                                 <button className="bldadd" disabled={added} onClick={() => addRule(p)}>
                                   <Icon name={added ? "check" : "add"} />{added ? "Added" : "Add"}
                                 </button>
@@ -494,17 +453,14 @@ export default function Builder() {
             ) : (
               <ul className="bldrules">
                 {rules.map((r) => (
-                  <li key={ruleKey(r)} className="bldrule">
-                    <span className="bldpillwrap">
-                      <span className={`bldpill ${r.direction}`}>{r.name} {dirLabel(r.direction)}</span>
-                      {!r.in_dataset && <span className="bldtag-ro" title="Not in the dataset — saved for research, not tested on patient data">research-only</span>}
-                    </span>
+                  <li key={`${r.itemid}-${r.direction}`} className="bldrule">
+                    <span className={`bldpill ${r.direction}`}>{r.name} {dirLabel(r.direction)}</span>
                     <div className="bldrule-body">
                       {r.rationale && <div className="bldrule-rat">{r.rationale}</div>}
                       {r.evidence && <div className="bldevidence"><Icon name="menu_book" /><span>{r.evidence}</span></div>}
                       <Citation citation={r.citation} />
                     </div>
-                    <button className="bldrm" onClick={() => removeRule(r)} aria-label="Remove pattern">
+                    <button className="bldrm" onClick={() => removeRule(r.itemid, r.direction)} aria-label="Remove pattern">
                       <Icon name="close" />
                     </button>
                   </li>
@@ -513,35 +469,15 @@ export default function Builder() {
             )}
 
             <div className="bldmanual">
-              <div className="bldpicker">
-                <input value={pickQuery} placeholder={`Search ${catalog.length || ""} labs by name or category…`}
-                  onChange={(e) => { setPickQuery(e.target.value); setPicked(null); setPickOpen(true); }}
-                  onFocus={() => setPickOpen(true)}
-                  onBlur={() => setTimeout(() => setPickOpen(false), 150)}
-                  onKeyDown={(e) => { if (e.key === "Enter") addManual(); }} />
-                {pickOpen && pickMatches.length > 0 && (
-                  <ul className="bldpicklist">
-                    {pickMatches.map((l) => (
-                      <li key={l.itemid} onMouseDown={() => choosePick(l)}>
-                        <span className="bldpicklabel">{l.label}</span>
-                        <span className="bldpickmeta">
-                          {l.category && <span className="bldcatchip">{l.category}</span>}
-                          {l.testable
-                            ? <span className="bldtag-ok">testable</span>
-                            : <span className="bldtag-ro">research-only</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              <select value={pickLab} onChange={(e) => setPickLab(e.target.value)}>
+                {labs.map((l) => <option key={l.itemid} value={l.itemid}>{l.name} ({l.unit})</option>)}
+              </select>
               <select value={pickDir} onChange={(e) => setPickDir(e.target.value)}>
                 <option value="high">↑ High</option>
                 <option value="low">↓ Low</option>
               </select>
-              <button className="bldghost" onClick={addManual} disabled={!pickQuery.trim()}><Icon name="add" />Add</button>
+              <button className="bldghost" onClick={addManual}><Icon name="add" />Add manually</button>
             </div>
-            <div className="bldhint">Pick any of the {catalog.length || ""} labs in the dataset. <b>Testable</b> labs run on patient data; others are saved as research-only.</div>
 
             {rules.length > 0 && (
               <div className="bldthresh">
@@ -577,15 +513,8 @@ export default function Builder() {
                   <div className="bldstats">
                     <div className="bldstat"><b>{run.n_matched}</b><span>admissions match</span></div>
                     <div className="bldstat"><b>{run.match_rate}%</b><span>of {run.total_admissions}</span></div>
-                    <div className="bldstat"><b>≥ {run.min_signals}</b><span>of {run.n_runnable ?? run.n_rules} testable</span></div>
+                    <div className="bldstat"><b>≥ {run.min_signals}</b><span>of {run.n_rules} patterns</span></div>
                   </div>
-                  {run.note && <div className="bldnote warn">{run.note}</div>}
-                  {run.skipped?.length > 0 && (
-                    <div className="bldskipped">
-                      <Icon name="info" />
-                      <span>Not tested (lab not in dataset): {run.skipped.map((s) => `${s.name} ${s.direction === "high" ? "↑" : "↓"}`).join(", ")}</span>
-                    </div>
-                  )}
                   {run.examples?.length > 0 ? (
                     <table className="bldtable">
                       <thead><tr><th>Patient</th><th>Admission</th><th>Matched labs</th></tr></thead>

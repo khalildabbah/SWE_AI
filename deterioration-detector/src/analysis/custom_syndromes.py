@@ -32,47 +32,6 @@ STORE = ROOT / "data" / "custom_syndromes.json"
 HIGH, LOW = "high", "low"
 VALID_ITEMIDS = set(LAB_DEFS.keys())
 
-# Common names/abbreviations for the 8 dataset labs, so a free-text proposal
-# like "BUN" or "WBC" still resolves to a runnable (in-dataset) lab.
-_LAB_ALIASES = {
-    "bun": 51006, "urea": 51006, "urea nitrogen": 51006,
-    "wbc": 51301, "white blood cells": 51301, "white blood cell": 51301,
-    "white cells": 51301, "leukocytes": 51301, "leucocytes": 51301,
-    "creatinine": 50912, "cr": 50912,
-    "potassium": 50971, "k": 50971,
-    "sodium": 50983, "na": 50983,
-    "bicarbonate": 50882, "bicarb": 50882, "hco3": 50882, "co2": 50882,
-    "hematocrit": 51221, "haematocrit": 51221, "hct": 51221,
-    "lactate": 50813, "lactic acid": 50813,
-}
-
-
-def resolve_lab(itemid, lab_name: str = "") -> tuple:
-    """Map a (itemid, name) pair to (itemid|None, display_name, in_dataset).
-
-    A lab is "in dataset" (runnable on patient data) if it is one of the 8
-    tracked labs — matched by itemid, exact name, or a common alias. Any other
-    lab is kept as a research-only pattern with itemid=None.
-    """
-    if itemid is not None and str(itemid).strip() != "":
-        try:
-            cand = int(itemid)
-        except (TypeError, ValueError):
-            cand = None
-        if cand in VALID_ITEMIDS:
-            return cand, LAB_DEFS[cand].name, True
-
-    key = (lab_name or "").strip()
-    if key:
-        for iid, d in LAB_DEFS.items():
-            if d.name.lower() == key.lower():
-                return iid, d.name, True
-        alias = _LAB_ALIASES.get(key.lower())
-        if alias is not None:
-            return alias, LAB_DEFS[alias].name, True
-        return None, key, False  # a real lab, just not in our dataset
-    return None, "", False
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -122,33 +81,29 @@ def get_custom(key: str) -> dict | None:
 
 
 def _clean_signals(signals: list[dict]) -> list[dict]:
-    """Normalise pattern rules over ANY lab. Rules over the 8 tracked labs are
-    marked in_dataset=True (runnable on patient data); rules over other real
-    labs are kept as research-only (itemid=None, in_dataset=False)."""
+    """Keep only well-formed signals over the 8 real labs; normalise fields."""
     out, seen = [], set()
     for s in signals or []:
-        direction = str(s.get("direction", "")).lower()
-        if direction not in (HIGH, LOW):
+        try:
+            itemid = int(s.get("itemid"))
+        except (TypeError, ValueError):
             continue
-        name_in = s.get("name") or s.get("lab_name") or s.get("lab") or ""
-        itemid, name, in_dataset = resolve_lab(s.get("itemid"), name_in)
-        if itemid is None and not name:
-            continue  # nothing to identify the lab by
-        dedup = (itemid if itemid is not None else name.lower(), direction)
+        direction = str(s.get("direction", "")).lower()
+        if itemid not in VALID_ITEMIDS or direction not in (HIGH, LOW):
+            continue
+        dedup = (itemid, direction)
         if dedup in seen:
             continue
         seen.add(dedup)
-        cite = s.get("citation", {}) or {}
         out.append({
             "itemid": itemid,
-            "name": name,
+            "name": LAB_DEFS[itemid].name,
             "direction": direction,
-            "in_dataset": in_dataset,
             "rationale": (s.get("rationale") or "").strip(),
             "evidence": (s.get("evidence") or "").strip(),
             "citation": {
-                "title": (cite.get("title") or "").strip(),
-                "url": (cite.get("url") or "").strip(),
+                "title": (s.get("citation", {}) or {}).get("title", "").strip(),
+                "url": (s.get("citation", {}) or {}).get("url", "").strip(),
             },
         })
     return out
@@ -221,29 +176,9 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
     """
     clean = _clean_signals(signals)
     if not clean:
-        raise ValueError("No valid patterns to run.")
-
-    runnable = [s for s in clean if s["in_dataset"] and s["itemid"] is not None]
-    skipped = [{"name": s["name"], "direction": s["direction"]}
-               for s in clean if not (s["in_dataset"] and s["itemid"] is not None)]
-    requested_min = max(1, int(min_signals or 1))
-
-    total_admissions = con.execute(
-        "SELECT COUNT(*) FROM (SELECT DISTINCT subject_id, hadm_id FROM labs_clean)"
-    ).fetchone()[0]
-
-    if not runnable:
-        return {
-            "n_matched": 0, "total_admissions": total_admissions, "match_rate": 0,
-            "min_signals": 0, "requested_min_signals": requested_min,
-            "n_rules": len(clean), "n_runnable": 0, "skipped": skipped, "examples": [],
-            "note": ("None of these patterns use a lab in this dataset, so the rule "
-                     "set can't be tested on patient data yet."),
-        }
-
-    # Threshold can't exceed the number of testable patterns.
-    effective_min = max(1, min(requested_min, len(runnable)))
-    itemids = sorted({s["itemid"] for s in runnable})
+        raise ValueError("No valid rules to run.")
+    min_signals = max(1, min(int(min_signals or 1), len(clean)))
+    itemids = sorted({s["itemid"] for s in clean})
 
     placeholders = ", ".join("?" for _ in itemids)
     rows = con.execute(f"""
@@ -259,17 +194,21 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
     for subject_id, hadm_id, itemid, value in rows:
         latest.setdefault((subject_id, hadm_id), {})[itemid] = value
 
+    total_admissions = con.execute(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT subject_id, hadm_id FROM labs_clean)"
+    ).fetchone()[0]
+
     matches = []
     for (subject_id, hadm_id), vals in latest.items():
         hits = []
-        for sig in runnable:
+        for sig in clean:
             v = vals.get(sig["itemid"])
             if v is not None and _out_of_range(sig["itemid"], v, sig["direction"]):
                 hits.append({
                     "itemid": sig["itemid"], "name": sig["name"],
                     "direction": sig["direction"], "value": round(v, 2),
                 })
-        if len(hits) >= effective_min:
+        if len(hits) >= min_signals:
             matches.append({
                 "subject_id": subject_id, "hadm_id": hadm_id,
                 "n_matched": len(hits), "matched": hits,
@@ -278,19 +217,11 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
     # most signals matched first — the most convincing examples on top
     matches.sort(key=lambda m: m["n_matched"], reverse=True)
     n_matched = len(matches)
-    note = ""
-    if skipped:
-        note = (f"{len(skipped)} pattern(s) use a lab not in this dataset and were "
-                f"not tested. Matched on the {len(runnable)} testable pattern(s).")
     return {
         "n_matched": n_matched,
         "total_admissions": total_admissions,
         "match_rate": round(100 * n_matched / total_admissions, 1) if total_admissions else 0,
-        "min_signals": effective_min,
-        "requested_min_signals": requested_min,
+        "min_signals": min_signals,
         "n_rules": len(clean),
-        "n_runnable": len(runnable),
-        "skipped": skipped,
-        "note": note,
         "examples": matches[:limit],
     }
