@@ -4,6 +4,7 @@ import {
   ReferenceArea, ReferenceLine, Area, AreaChart, CartesianGrid,
 } from "recharts";
 import Chatbot from "./Chatbot.jsx";
+import Builder from "./Builder.jsx";
 
 // Clinical palette (mirrors styles.css tokens) for chart strokes/fills.
 const RISK_COLOR = { Low: "#10b981", Medium: "#f59e0b", High: "#ef4444" };
@@ -190,6 +191,8 @@ export default function App() {
             <Icon name="fact_check" /><span>Detector Accuracy</span></a>
           <a className={page === "rules" ? "active" : ""} onClick={() => setPage("rules")}>
             <Icon name="menu_book" /><span>Scoring Rule Book</span></a>
+          <a className={page === "builder" ? "active" : ""} onClick={() => setPage("builder")}>
+            <Icon name="construction" /><span>Syndrome Builder</span></a>
         </nav>
 
         <div className="explorer">
@@ -265,6 +268,7 @@ export default function App() {
                 : page === "evaluation" ? "Detector Accuracy"
                 : page === "leadtime" ? "Early Warning"
                 : page === "rules" ? "Scoring Rule Book"
+                : page === "builder" ? "Syndrome Builder"
                 : "Deterioration Watch"}
             </span>
           </div>
@@ -283,6 +287,8 @@ export default function App() {
             <LeadTime />
           ) : page === "rules" ? (
             <RuleBook />
+          ) : page === "builder" ? (
+            <Builder />
           ) : (
             <>
               {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}

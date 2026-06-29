@@ -22,14 +22,17 @@ from src.analysis.lead_time import compute_lead_time
 from src.analysis.rules import build_rules
 from src.ingestion.lab_dictionary import LAB_DEFS
 from src.api.chat import router as chat_router
+from src.api.builder import router as builder_router
 
 app = FastAPI(title="Patient Deterioration Detector", version="0.1.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
-# Grounded dataset Q&A chatbot (Gemini) — POST /api/chat
+# Grounded dataset Q&A chatbot (OpenAI) — POST /api/chat
 app.include_router(chat_router)
+# Syndrome Builder: AI-assisted, web-searched custom syndromes — /api/builder/*
+app.include_router(builder_router)
 
 
 @app.get("/api/stats")
