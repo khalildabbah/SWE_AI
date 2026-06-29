@@ -1,5 +1,5 @@
 """
-Tests for the Syndrome Builder engine (src/analysis/custom_syndromes):
+Tests for the Pattern Builder engine (src/analysis/custom_syndromes):
 rule cleaning/validation, JSON persistence, and applying a custom rule set to a
 (faked) cohort. Run:  pytest -q
 """

@@ -700,7 +700,7 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
   .cbpanel { right: 8px; bottom: 8px; height: calc(100vh - 16px); }
 }
 
-/* ── Syndrome Builder ("build it yourself") ───────────────────────────────── */
+/* ── Pattern Builder ("build it yourself") ────────────────────────────────── */
 .bld { display: flex; flex-direction: column; gap: 16px; }
 .bldintro h2 {
   display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
@@ -709,8 +709,44 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .bldintro h2 .material-symbols-outlined { color: var(--primary); }
 .bldintro p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--on-surface-variant); max-width: 860px; }
 
-.bldgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 1080px) { .bldgrid { grid-template-columns: 1fr; } }
+/* stepper */
+.bldsteps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bldstep { display: flex; align-items: center; gap: 8px; background: var(--surface);
+  border: 1px solid var(--outline-variant); border-radius: 999px; padding: 7px 14px 7px 8px;
+  cursor: pointer; color: var(--on-surface-variant); font-family: inherit; }
+.bldstep:disabled { cursor: default; opacity: 0.55; }
+.bldstep.active { border-color: var(--primary); background: var(--surface-high); }
+.bldstep-num { width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-highest); color: var(--on-surface-variant); font-size: 12.5px; font-weight: 700; }
+.bldstep.active .bldstep-num { background: var(--primary-container); color: #fff; }
+.bldstep.done .bldstep-num { background: var(--healthy); color: #04120c; }
+.bldstep.done .bldstep-num .material-symbols-outlined { font-size: 15px; }
+.bldstep-lbl { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.bldstep-ic { font-size: 16px; }
+.bldstep.active .bldstep-lbl { color: var(--on-surface); }
+.bldstep-bar { flex: 1; min-width: 12px; height: 2px; background: var(--outline-variant); border-radius: 2px; }
+.bldstep-bar.done { background: var(--healthy); }
+@media (max-width: 720px) { .bldstep-lbl { display: none; } .bldstep-bar { min-width: 8px; } }
+
+/* per-step stage + nav */
+.bldstage { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.bldlede { margin: -4px 0 14px; font-size: 13px; line-height: 1.5; color: var(--on-surface-variant); }
+.bldnav { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bldchips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.bldchips button { font-size: 12.5px; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--surface-high); color: var(--on-surface-variant);
+  border: 1px solid var(--outline-variant); }
+.bldchips button:hover { border-color: var(--primary); color: var(--on-surface); }
+.bldchips button.on { border-color: var(--primary); background: var(--primary-container); color: #fff; }
+.bldcount { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600;
+  color: var(--on-surface); background: var(--surface-highest); border-radius: 999px; padding: 4px 11px; }
+.bldcount .material-symbols-outlined { font-size: 16px; color: var(--primary); }
+
+/* inline evidence (read here, no need to click out) */
+.bldevidence { display: flex; gap: 6px; margin-top: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
+  color: var(--on-surface-variant); background: var(--surface-lowest);
+  border-left: 2px solid var(--primary-container); border-radius: var(--radius); }
+.bldevidence .material-symbols-outlined { font-size: 15px; color: var(--primary); flex-shrink: 0; margin-top: 1px; }
 
 .bldcol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .bldcard {
@@ -749,6 +785,7 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .bldsub .material-symbols-outlined { font-size: 13px; }
 
 .bldchat-body { height: 420px; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.bldchat-tall { height: clamp(420px, 58vh, 680px); }
 .bldwelcome p { margin: 0 0 12px; font-size: 13px; line-height: 1.5; color: var(--on-surface-variant); }
 .bldsuggest { display: flex; flex-direction: column; gap: 8px; }
 .bldsuggest button {

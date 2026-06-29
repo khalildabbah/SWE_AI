@@ -2,7 +2,7 @@
 data/raw/*.csv
 data/raw/*.xlsx
 data/processed/*.duckdb
-data/custom_syndromes.json  # user-built syndromes (Syndrome Builder tab)
+data/custom_syndromes.json  # user-built syndromes (Pattern Builder tab)
 
 # secrets / local config
 .env

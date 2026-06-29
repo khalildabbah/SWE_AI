@@ -192,7 +192,7 @@ export default function App() {
           <a className={page === "rules" ? "active" : ""} onClick={() => setPage("rules")}>
             <Icon name="menu_book" /><span>Scoring Rule Book</span></a>
           <a className={page === "builder" ? "active" : ""} onClick={() => setPage("builder")}>
-            <Icon name="construction" /><span>Syndrome Builder</span></a>
+            <Icon name="construction" /><span>Pattern Builder</span></a>
         </nav>
 
         <div className="explorer">
@@ -268,7 +268,7 @@ export default function App() {
                 : page === "evaluation" ? "Detector Accuracy"
                 : page === "leadtime" ? "Early Warning"
                 : page === "rules" ? "Scoring Rule Book"
-                : page === "builder" ? "Syndrome Builder"
+                : page === "builder" ? "Pattern Builder"
                 : "Deterioration Watch"}
             </span>
           </div>
