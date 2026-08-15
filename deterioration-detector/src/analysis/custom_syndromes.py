@@ -25,9 +25,10 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from src.analysis.abnormal import classify, rule_bound, rule_fires, CRITICAL
+from src.analysis.abnormal import rule_bound, rule_fires, CRITICAL
 from src.analysis.lab_catalog import load_catalog
-from src.analysis.trends import trend, WORSENING
+from src.analysis.pattern_engine import LabState, evaluate_pattern
+from src.analysis.trends import WORSENING
 from src.ingestion.lab_dictionary import LAB_DEFS
 from src.storage import pattern_store
 
@@ -284,44 +285,33 @@ def detect_custom(states: list) -> list[dict]:
     Patterns whose rules are ALL research-only are skipped entirely — there is
     nothing to evaluate, so claiming a result would be misleading.
     """
-    by_id = {st.itemid: st for st in states}
     results: list[dict] = []
 
     for record in list_custom():
         signals = _clean_signals(record.get("signals") or [])
-        runnable = [s for s in signals if s["in_dataset"] and s["itemid"] is not None]
-        if not runnable:
+        # `evaluate_pattern` is the ONLY thing that decides whether a pattern
+        # matched; this function just dresses its result up as a card.
+        result = evaluate_pattern(states, signals, record.get("min_signals"))
+        if not result.matched:
             continue
 
+        by_rule = {(s["itemid"], s["direction"]): s for s in signals}
         matched, missing = [], []
-        any_critical = any_worsening = False
-        for sig in runnable:
-            st = by_id.get(sig["itemid"])
-            if st is not None and _out_of_range(sig["itemid"], st.latest_value,
-                                                sig["direction"], sig.get("threshold")):
-                status = classify(sig["itemid"], st.latest_value)
-                tr = trend(sig["itemid"], st.series)
-                any_critical = any_critical or status == CRITICAL
-                any_worsening = any_worsening or tr == WORSENING
+        for r in result.testable_rules:
+            sig = by_rule.get((r.itemid, r.direction), {})
+            if r.fired:
                 matched.append({
-                    "itemid": sig["itemid"], "test_name": st.test_name, "unit": st.unit,
-                    "value": st.latest_value, "direction": sig["direction"],
-                    "status": status, "trend": tr, "threshold": sig.get("threshold"),
-                    "bound": rule_bound(sig["itemid"], sig["direction"], sig.get("threshold")),
-                    "rationale": sig["rationale"], "citation": sig["citation"],
+                    "itemid": r.itemid, "test_name": r.name, "unit": r.unit,
+                    "value": r.value, "direction": r.direction,
+                    "status": r.status, "trend": r.trend,
+                    "threshold": r.threshold, "bound": r.bound,
+                    "rationale": sig.get("rationale", ""),
+                    "citation": sig.get("citation", {}),
                 })
             else:
-                missing.append({"itemid": sig["itemid"], "test_name": sig["name"],
-                                "direction": sig["direction"],
-                                "threshold": sig.get("threshold"),
-                                "bound": rule_bound(sig["itemid"], sig["direction"],
-                                                    sig.get("threshold"))})
-
-        # The saved threshold can exceed the number of testable rules; cap it the
-        # same way run_on_cohort() does so the pattern stays evaluable.
-        min_signals = max(1, min(int(record.get("min_signals") or 1), len(runnable)))
-        if len(matched) < min_signals:
-            continue
+                missing.append({"itemid": r.itemid, "test_name": r.name,
+                                "direction": r.direction,
+                                "threshold": r.threshold, "bound": r.bound})
 
         seen, citations = set(), []
         for s in signals:
@@ -331,20 +321,23 @@ def detect_custom(states: list) -> list[dict]:
                 seen.add(marker)
                 citations.append({"title": cite.get("title", ""), "url": cite.get("url", "")})
 
+        any_critical = any(r.status == CRITICAL for r in result.fired_rules)
+        any_worsening = any(r.trend == WORSENING for r in result.fired_rules)
         results.append({
             "key": record.get("key", ""),
             "name": record.get("name", "Custom pattern"),
             "plain": _plain_summary(record, signals),
             "severity": "critical" if any_critical else "warning",
-            "confidence": round(100 * len(matched) / len(runnable)),
+            "confidence": round(100 * result.n_fired / result.n_testable),
             "worsening": any_worsening,
             "matched": matched,
             "missing": missing,
             "custom": True,
             "citations": citations,
             "research_only": [
-                {"name": s["name"], "direction": s["direction"], "citation": s["citation"]}
-                for s in signals if not (s["in_dataset"] and s["itemid"] is not None)
+                {"name": r.name, "direction": r.direction,
+                 "citation": by_rule.get((r.itemid, r.direction), {}).get("citation", {})}
+                for r in result.research_only_rules
             ],
         })
 
@@ -358,6 +351,15 @@ def _out_of_range(itemid: int, value: float, direction: str,
                   threshold: float | None = None) -> bool:
     """Thin alias for the shared rule test, kept for readability at call sites."""
     return rule_fires(itemid, value, direction, threshold)
+
+
+def _name_of(runnable: list[dict], outcome) -> str:
+    """The saved rule's display name for an evaluated outcome (the cohort query
+    doesn't fetch test names, so they come from the pattern itself)."""
+    for s in runnable:
+        if s["itemid"] == outcome.itemid and s["direction"] == outcome.direction:
+            return s["name"]
+    return ""
 
 
 def run_on_cohort(con, signals: list[dict], min_signals: int,
@@ -392,8 +394,6 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
                      "set can't be tested on patient data yet."),
         }
 
-    # Threshold can't exceed the number of testable patterns.
-    effective_min = max(1, min(requested_min, len(runnable)))
     itemids = sorted({s["itemid"] for s in runnable})
 
     placeholders = ", ".join("?" for _ in itemids)
@@ -410,24 +410,33 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
     for subject_id, hadm_id, itemid, value in rows:
         latest.setdefault((subject_id, hadm_id), {})[itemid] = value
 
-    matches = []
+    # The bulk query above is just a fast way to fetch each lab's latest value;
+    # the actual decision goes through the same executor the patient card and
+    # the triage ranking use, so all three can't disagree about one pattern.
+    # Series of one value means the trend window is unsatisfiable, so a cohort
+    # run is severity-only — matching here has never used trends.
+    matches, effective_min = [], None
     for (subject_id, hadm_id), vals in latest.items():
-        hits = []
-        for sig in runnable:
-            v = vals.get(sig["itemid"])
-            if v is not None and _out_of_range(sig["itemid"], v, sig["direction"],
-                                               sig.get("threshold")):
-                hits.append({
-                    "itemid": sig["itemid"], "name": sig["name"],
-                    "direction": sig["direction"], "value": round(v, 2),
-                    "bound": rule_bound(sig["itemid"], sig["direction"],
-                                        sig.get("threshold")),
-                })
-        if len(hits) >= effective_min:
-            matches.append({
-                "subject_id": subject_id, "hadm_id": hadm_id,
-                "n_matched": len(hits), "matched": hits,
-            })
+        states = [
+            LabState(itemid=iid, test_name="", unit="", latest_value=v, series=[v])
+            for iid, v in vals.items()
+        ]
+        result = evaluate_pattern(states, clean, requested_min)
+        effective_min = result.min_signals
+        if not result.matched:
+            continue
+        matches.append({
+            "subject_id": subject_id, "hadm_id": hadm_id,
+            "n_matched": result.n_fired,
+            "matched": [{
+                "itemid": r.itemid, "name": _name_of(runnable, r) or r.name,
+                "direction": r.direction, "value": round(r.value, 2),
+                "bound": r.bound,
+            } for r in result.fired_rules],
+        })
+
+    if effective_min is None:   # no admission had any of these labs at all
+        effective_min = max(1, min(requested_min, len(runnable)))
 
     # most signals matched first — the most convincing examples on top
     matches.sort(key=lambda m: m["n_matched"], reverse=True)

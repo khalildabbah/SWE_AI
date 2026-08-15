@@ -26,23 +26,15 @@ stays truthful. Only two things differ, both necessarily:
 """
 from dataclasses import dataclass, field
 
-from src.analysis.abnormal import classify, points, rule_bound, rule_fires
+from src.analysis.abnormal import classify, points
 from src.analysis.trends import WORSENING, trend
-
-LOW, MEDIUM, HIGH = "Low", "Medium", "High"
-
-# Most one rule can contribute: 2 severity points (critical) + 1 worsening.
-MAX_POINTS_PER_RULE = 3
-
-
-@dataclass
-class LabState:
-    """Computed state of one lab within an admission (newest value + its history)."""
-    itemid: int
-    test_name: str
-    unit: str
-    latest_value: float
-    series: list[float] = field(default_factory=list)  # oldest -> newest
+# The pattern half of the scoring lives in its own module so that one executor
+# serves every caller. Re-exported here because `LabState`, the category names
+# and the scaled-band helper are imported from `risk_score` all over the app.
+from src.analysis.pattern_engine import (  # noqa: F401  (re-exported)
+    LabState, PatternResult, evaluate_pattern, categorize_for_max,
+    LOW, MEDIUM, HIGH, MAX_POINTS_PER_RULE,
+)
 
 
 @dataclass
@@ -87,80 +79,35 @@ def score_admission(states: list[LabState]) -> RiskResult:
     return RiskResult(score=score, category=categorize(score), contributions=contributions)
 
 
-# ── Scoring by a user-built pattern ──────────────────────────────────────────
-
-def _matches_direction(itemid: int, value: float, direction: str,
-                       threshold: float | None = None) -> bool:
-    """Does the rule fire — at its own threshold, or the reference range?"""
-    return rule_fires(itemid, value, direction, threshold)
-
-
-def categorize_for_max(score: int, max_score: int) -> str:
-    """Low/Medium/High scaled to the most a given pattern could score.
-
-    The built-in bands (0-2 / 3-5 / 6+) assume eight labs are in play. A two-rule
-    pattern tops out at 6 points, so those bands would call almost everything
-    Low. Scoring the top third of a pattern's own ceiling as High keeps the
-    badge meaningful whether the pattern has two rules or six.
-    """
-    if max_score <= 0:
-        return LOW
-    if score >= (2 * max_score) / 3:
-        return HIGH
-    if score >= max_score / 3:
-        return MEDIUM
-    return LOW
-
+# ── Scoring by a user-built pattern ──────────────────────────
 
 def score_pattern(states: list[LabState], signals: list[dict]) -> RiskResult:
     """Score one admission against a user-built pattern's rules.
 
-    `signals` are cleaned pattern rules ({itemid, name, direction, in_dataset});
-    rules over labs this dataset doesn't carry are ignored, since there is
-    nothing to measure. Returns the same RiskResult shape as `score_admission`,
-    so every consumer — the badge, the trajectory, the alerts — works unchanged.
+    A thin adapter: `pattern_engine.evaluate_pattern` does the deciding, this
+    reshapes its result into the `RiskResult` that the badge, the alerts and the
+    trajectory already consume. Keeping the maths in one place is what stops the
+    score disagreeing with the card and the cohort run about the same pattern.
     """
-    by_id = {st.itemid: st for st in states}
-    runnable = [s for s in signals if s.get("in_dataset") and s.get("itemid") is not None]
-
-    score = 0
-    contributions = []
-    for sig in runnable:
-        itemid, direction = sig["itemid"], sig["direction"]
-        st = by_id.get(itemid)
-        if st is None:
-            continue  # this admission never had the lab drawn
-
-        # A lab moving the way the pattern does NOT care about is not evidence
-        # for the syndrome, so it contributes nothing at all.
-        threshold = sig.get("threshold")
-        on_side = _matches_direction(itemid, st.latest_value, direction, threshold)
-        status = classify(itemid, st.latest_value)
-        # the pattern's own direction decides what "getting worse" means here
-        tr = trend(itemid, st.series, worsening=direction)
-        # Severity stays anchored to the reference range: how abnormal a value is
-        # clinically does not change because the rule set a stricter threshold.
-        # A rule that fired is always worth something though, so a threshold
-        # LOOSER than the range can't match and still score zero.
-        sev_pts = max(1, points(itemid, st.latest_value)) if on_side else 0
-        trend_pts = 1 if (on_side and tr == WORSENING) else 0
-        lab_total = sev_pts + trend_pts
-        score += lab_total
-        contributions.append({
-            "itemid": itemid,
-            "test_name": st.test_name,
-            "unit": st.unit,
-            "latest_value": st.latest_value,
-            "status": status if on_side else "normal",
-            "trend": tr,
-            "points": lab_total,
-            "direction": direction,
-            "matched": on_side,
-            "threshold": threshold,
-            "bound": rule_bound(itemid, direction, threshold),
-        })
-
+    result = evaluate_pattern(states, signals)
+    contributions = [
+        {
+            "itemid": r.itemid,
+            "test_name": r.name,
+            "unit": r.unit,
+            "latest_value": r.value,
+            "status": r.status,
+            "trend": r.trend,
+            "points": r.points,
+            "direction": r.direction,
+            "matched": r.fired,
+            "threshold": r.threshold,
+            "bound": r.bound,
+        }
+        # a lab that was never drawn has nothing to report
+        for r in result.testable_rules if r.value is not None
+    ]
+    # biggest drivers first
     contributions.sort(key=lambda c: c["points"], reverse=True)
-    max_score = MAX_POINTS_PER_RULE * len(runnable)
-    return RiskResult(score=score, category=categorize_for_max(score, max_score),
+    return RiskResult(score=result.score, category=result.category,
                       contributions=contributions)
