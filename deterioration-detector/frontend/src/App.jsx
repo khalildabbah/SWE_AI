@@ -28,6 +28,13 @@ const fmtTime = (iso) => iso.replace("T", " ").slice(0, 16);
 const Icon = ({ name, className = "" }) => (
   <span className={`material-symbols-outlined ${className}`}>{name}</span>
 );
+// Marks each real lab measurement as its own square — used in the trajectory
+// chart's "Points" mode, where readings intentionally aren't joined by a line.
+const SquareDot = ({ cx, cy, fill }) => {
+  if (cx == null || cy == null) return null;
+  const s = 4;
+  return <rect x={cx - s} y={cy - s} width={s * 2} height={s * 2} fill={fill} />;
+};
 
 // Plain-English explanations so non-clinical users understand every term on hover.
 const GLOSSARY = {
@@ -367,7 +374,23 @@ function DataBar({ stats }) {
 
 function Detail({ d, meta }) {
   const cat = d.risk.category;
-  const traj = d.trajectory.map((t) => ({ ...t, label: fmtTime(t.time) }));
+  // Trajectory defaults to connected (step line) for at-a-glance trend
+  // reading; a toggle lets clinicians switch to disconnected points, since
+  // each is a discrete lab measurement rather than a continuous signal.
+  const [trajConnected, setTrajConnected] = useState(true);
+  // `ts` (epoch ms) drives x-axis position so real elapsed time between labs
+  // is represented spatially — irregular gaps (hours vs. days) render as
+  // irregular gaps on the chart instead of being squashed into even steps.
+  const traj = d.trajectory.map((t) => ({ ...t, label: fmtTime(t.time), ts: new Date(t.time).getTime() }));
+  // Recharts' auto tick generation for a numeric/time axis misbehaves on this
+  // domain (it emits a tick every ~15min across a 1000+ hour span, producing
+  // thousands of overlapping labels) — so we hand it a fixed, evenly spaced
+  // set of tick positions instead of letting it derive them.
+  const tsMin = traj[0]?.ts;
+  const tsMax = traj[traj.length - 1]?.ts;
+  const trajTicks = tsMin != null && tsMax != null
+    ? Array.from({ length: 6 }, (_, i) => tsMin + ((tsMax - tsMin) * i) / 5)
+    : undefined;
   // status/trend per lab live in the risk breakdown, keyed by itemid.
   const byId = Object.fromEntries((d.risk.contributions || []).map((c) => [c.itemid, c]));
   const stroke = RISK_COLOR[cat];
@@ -377,6 +400,8 @@ function Detail({ d, meta }) {
   const lt = d.lead_time || {};
   const concernLabel = lt.concern_time ? fmtTime(lt.concern_time) : null;
   const eventLabel = lt.event_time ? fmtTime(lt.event_time) : null;
+  const concernTs = lt.concern_time ? new Date(lt.concern_time).getTime() : null;
+  const eventTs = lt.event_time ? new Date(lt.event_time).getTime() : null;
   const fmtH = (h) => (h >= 48 ? `${(h / 24).toFixed(1)} days` : `${h} h`);
   const leadMsg = !lt.deteriorated
     ? "No critically out-of-range value was reached during this stay."
@@ -447,12 +472,22 @@ function Detail({ d, meta }) {
             <h3><Tip text={TIPS.trajectory}>Risk Trajectory Over Time</Tip></h3>
             <div className="desc">Combined deterioration index across the hospital stay</div>
           </div>
-          {lt.deteriorated && (concernLabel || eventLabel) && (
-            <div className="trajlegend">
-              {concernLabel && <span className="lg concern"><span className="swatch" />First concern</span>}
-              {eventLabel && <span className="lg event"><span className="swatch" />First critical value</span>}
+          <div className="trajright">
+            <div className="trajmode">
+              <button className={!trajConnected ? "active" : ""} onClick={() => setTrajConnected(false)}>
+                <Icon name="grid_on" />Points
+              </button>
+              <button className={trajConnected ? "active" : ""} onClick={() => setTrajConnected(true)}>
+                <Icon name="show_chart" />Connected
+              </button>
             </div>
-          )}
+            {lt.deteriorated && (concernLabel || eventLabel) && (
+              <div className="trajlegend">
+                {concernLabel && <span className="lg concern"><span className="swatch" />First concern</span>}
+                {eventLabel && <span className="lg event"><span className="swatch" />First critical value</span>}
+              </div>
+            )}
+          </div>
         </div>
         <div className="leadcallout"><Icon name="schedule" /><Tip text={TIPS.lead_time}>{leadMsg}</Tip></div>
         <ResponsiveContainer width="100%" height={300}>
@@ -464,18 +499,28 @@ function Detail({ d, meta }) {
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#424754" strokeDasharray="4 4" vertical={false} />
-            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#8c909f", fontFamily: "Geist Mono" }} minTickGap={48} />
+            {/* type="number" spaces points by real elapsed time rather than by
+                measurement index, so gaps between labs read as gaps. Explicit
+                `ticks` sidesteps recharts' broken auto tick generation on this domain. */}
+            <XAxis dataKey="ts" type="number" domain={[tsMin, tsMax]} ticks={trajTicks}
+              tickFormatter={(ts) => fmtTime(new Date(ts).toISOString())}
+              tick={{ fontSize: 10, fill: "#8c909f", fontFamily: "Geist Mono" }} />
             <YAxis tick={{ fontSize: 11, fill: "#8c909f", fontFamily: "Geist Mono" }} width={36} />
             <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6 }}
-              labelStyle={{ color: "#c2c6d6" }} />
-            <Area type="monotone" dataKey="score" stroke={stroke} fill="url(#g)" strokeWidth={3}
-              dot={false} activeDot={{ r: 5 }} />
-            {concernLabel && (
-              <ReferenceLine x={concernLabel} stroke="#f59e0b" strokeDasharray="3 3"
+              labelStyle={{ color: "#c2c6d6" }} labelFormatter={(ts) => fmtTime(new Date(ts).toISOString())} />
+            {/* stepAfter: a lab value holds constant until the next reading rather
+                than smoothly drifting toward it — matches how the data is actually sampled.
+                In "Points" mode (default) the stroke/fill are hidden entirely so only the
+                per-measurement square markers show — no implied connection between readings. */}
+            <Area type="stepAfter" dataKey="score" isAnimationActive={false}
+              stroke={trajConnected ? stroke : "none"} fill={trajConnected ? "url(#g)" : "none"} strokeWidth={3}
+              dot={trajConnected ? false : <SquareDot fill={stroke} />} activeDot={{ r: 5 }} />
+            {concernTs && (
+              <ReferenceLine x={concernTs} stroke="#f59e0b" strokeDasharray="3 3"
                 label={{ value: "concern", position: "insideTopLeft", fill: "#f59e0b", fontSize: 10 }} />
             )}
-            {eventLabel && eventLabel !== concernLabel && (
-              <ReferenceLine x={eventLabel} stroke="#ef4444" strokeDasharray="3 3"
+            {eventTs && eventTs !== concernTs && (
+              <ReferenceLine x={eventTs} stroke="#ef4444" strokeDasharray="3 3"
                 label={{ value: "critical", position: "insideTopRight", fill: "#ef4444", fontSize: 10 }} />
             )}
           </AreaChart>

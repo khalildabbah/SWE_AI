@@ -462,6 +462,19 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .trajlegend .swatch { width: 14px; height: 0; border-top: 2px dashed var(--outline); display: inline-block; }
 .trajlegend .concern .swatch { border-top-color: var(--warning); }
 .trajlegend .event .swatch { border-top-color: var(--critical); }
+.trajright { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.trajmode { display: flex; gap: 6px; }
+.trajmode button {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--surface-high); color: var(--on-surface-variant);
+  border: 1px solid transparent; border-radius: var(--radius);
+  padding: 5px 10px; cursor: pointer; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; font-family: inherit;
+  transition: background .15s, color .15s;
+}
+.trajmode button .material-symbols-outlined { font-size: 14px; }
+.trajmode button:hover { background: var(--surface-highest); }
+.trajmode button.active { background: var(--primary); color: var(--on-primary); }
 
 /* ── Scoring Rule Book ── */
 /* cited-source pill */
