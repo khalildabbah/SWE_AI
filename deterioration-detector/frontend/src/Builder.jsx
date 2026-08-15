@@ -15,6 +15,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * Talks to /api/builder/* — the OpenAI key (and live web search) stay
  * server-side. A pattern rule is one lab + a direction (high/low) + a rationale
  * + inline evidence + a citation.
+ *
+ * A saved pattern isn't the end of the road: it is evaluated on every patient
+ * alongside the built-in syndromes, and a run result links straight through to
+ * the patient it found (`onOpenPatient`).
  */
 
 const Icon = ({ name, className = "" }) => (
@@ -70,11 +74,12 @@ function Citation({ citation }) {
   return null;
 }
 
-export default function Builder() {
+export default function Builder({ onOpenPatient }) {
   const [step, setStep] = useState(1);
 
   const [catalog, setCatalog] = useState([]); // {itemid,label,category,units,testable,n_rows}
   const [saved, setSaved] = useState([]);
+  const [storage, setStorage] = useState(null); // "motherduck" | "file"
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -82,13 +87,17 @@ export default function Builder() {
 
   const [rules, setRules] = useState([]); // {itemid,name,direction,rationale,evidence,citation}
   const [minSignals, setMinSignals] = useState(1);
+  const [editing, setEditing] = useState(null); // ruleKey of the rule being edited
 
   // co-work chat
-  const [messages, setMessages] = useState([]); // {role,text,proposals?,citations?}
+  const [messages, setMessages] = useState([]); // {role,text,proposals?,citations?,failed?}
   const [input, setInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const bodyRef = useRef(null);
-  const kickedOff = useRef(false);
+  const abortRef = useRef(null);
+  // The syndrome name the current conversation belongs to. Renaming at step 1
+  // makes the old conversation irrelevant, so it starts fresh instead.
+  const [researchedFor, setResearchedFor] = useState(null);
 
   // manual add (lab pick-list) + actions
   const [pickQuery, setPickQuery] = useState("");
@@ -98,6 +107,7 @@ export default function Builder() {
   const [saveMsg, setSaveMsg] = useState(null);
   const [run, setRun] = useState(null);
   const [runLoading, setRunLoading] = useState(false);
+  const importRef = useRef(null);
 
   useEffect(() => {
     fetch("/api/builder/catalog").then((r) => r.json()).then((d) => {
@@ -120,20 +130,27 @@ export default function Builder() {
     setMinSignals((m) => Math.max(1, Math.min(m, Math.max(1, rules.length))));
   }, [rules.length]);
 
-  // Entering co-research for the first time kicks off the conversation so the
-  // step is immediately productive about the chosen syndrome.
+  // Entering co-research kicks off the conversation so the step is immediately
+  // productive. Re-kicks if the syndrome was renamed, since the previous
+  // conversation was about a different question.
   useEffect(() => {
-    if (step === 2 && !kickedOff.current && messages.length === 0 && name.trim()) {
-      kickedOff.current = true;
-      send(`Let's build lab-based pattern rules for "${name.trim()}". Search the `
-        + `literature and propose pattern rules (a lab + a direction) — summarise the `
-        + `key evidence here so I can decide without leaving the page.`);
-    }
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (step !== 2) return;
+    const subject = name.trim();
+    if (!subject || researchedFor === subject) return;
+    setResearchedFor(subject);
+    setMessages([]);
+    send(`Let's build lab-based pattern rules for "${subject}". Search the `
+      + `literature and propose pattern rules (a lab + a direction) — summarise the `
+      + `key evidence here so I can decide without leaving the page.`, []);
+  }, [step, name]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Abandon an in-flight research turn if the user navigates away mid-search.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   function loadSaved() {
     fetch("/api/builder/syndromes").then((r) => r.json())
-      .then((d) => setSaved(d.items || [])).catch(() => {});
+      .then((d) => { setSaved(d.items || []); setStorage(d.storage || null); })
+      .catch(() => {});
   }
 
   // testable (tracked) labs, keyed by lowercased label, for resolving names
@@ -165,6 +182,33 @@ export default function Builder() {
     setRun(null);
   }
 
+  // Edit one rule in place. Keyed by the rule's identity BEFORE the edit,
+  // because changing the direction changes that identity.
+  function updateRule(key, patch) {
+    setRules((rs) => rs.map((r) => (ruleKey(r) === key ? { ...r, ...patch } : r)));
+    setRun(null);
+  }
+
+  function updateCitation(key, patch) {
+    setRules((rs) => rs.map((r) => (ruleKey(r) === key
+      ? { ...r, citation: { ...(r.citation || {}), ...patch } } : r)));
+  }
+
+  // Flipping the direction changes the rule's identity, so the open editor has
+  // to follow it — and the flip is refused if it would collide with a rule that
+  // already exists.
+  function changeDirection(rule, direction) {
+    if (direction === rule.direction) return;
+    const next = { ...rule, direction };
+    if (hasRule(next)) return;
+    const from = ruleKey(rule);
+    updateRule(from, { direction });
+    setEditing((cur) => (cur === from ? ruleKey(next) : cur));
+  }
+
+  // A rule nobody sourced — worth flagging, since the whole point is evidence.
+  const isUncited = (r) => !(r.citation?.url || r.citation?.title);
+
   // matches for the lab pick-list (label or category contains the query)
   const pickMatches = useMemo(() => {
     const s = pickQuery.trim().toLowerCase();
@@ -194,33 +238,72 @@ export default function Builder() {
     setPickQuery(""); setPicked(null); setPickOpen(false);
   }
 
-  async function send(text) {
+  /* One co-research turn.
+   * `historyOverride` lets the kickoff pass an explicit (empty) history, since
+   * the `messages` reset it depends on hasn't been applied yet at that point.
+   * A web-searched turn can take 30s+, so it is always abortable. */
+  async function send(text, historyOverride) {
     const msg = (text ?? input).trim();
     if (!msg || chatLoading) return;
     setInput("");
-    const history = messages.map((m) => ({ role: m.role, text: m.text }));
+    const history = historyOverride
+      ?? messages.filter((m) => !m.failed).map((m) => ({ role: m.role, text: m.text }));
     setMessages((m) => [...m, { role: "user", text: msg }]);
     setChatLoading(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const r = await fetch("/api/builder/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, description, message: msg, history }),
+        signal: controller.signal,
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setMessages((m) => [...m, { role: "model", text: data.detail || "The builder AI hit an error. Please try again." }]);
+        setMessages((m) => [...m, {
+          role: "model", failed: true, retry: msg, retryHistory: history,
+          text: data.detail || "The builder AI hit an error. Please try again.",
+        }]);
       } else {
         setMessages((m) => [...m, {
           role: "model", text: data.reply,
           proposals: data.proposals || [], citations: data.citations || [],
         }]);
       }
-    } catch {
-      setMessages((m) => [...m, { role: "model", text: "Couldn't reach the builder AI — is the API running?" }]);
+    } catch (e) {
+      if (e.name === "AbortError") {
+        setMessages((m) => [...m, {
+          role: "model", failed: true, retry: msg, retryHistory: history,
+          text: "Search cancelled.",
+        }]);
+      } else {
+        setMessages((m) => [...m, {
+          role: "model", failed: true, retry: msg, retryHistory: history,
+          text: "Couldn't reach the builder AI — is the API running?",
+        }]);
+      }
     } finally {
+      abortRef.current = null;
       setChatLoading(false);
     }
+  }
+
+  function cancelSend() {
+    abortRef.current?.abort();
+  }
+
+  // Retry drops just the failed exchange — that error and the question that
+  // produced it — so the conversation isn't littered with errors while
+  // everything said before it is preserved. Then it re-sends the original
+  // question against the history it originally had.
+  function retrySend(msg, index) {
+    setMessages((m) => {
+      const from = index > 0 && m[index - 1]?.role === "user" ? index - 1 : index;
+      return [...m.slice(0, from), ...m.slice(index + 1)];
+    });
+    send(msg.retry, msg.retryHistory);
   }
 
   const onKey = (e) => {
@@ -258,8 +341,9 @@ export default function Builder() {
       citation: sg.citation || { title: "", url: "" },
     })));
     setMinSignals(s.min_signals || 1);
-    setMessages([]); kickedOff.current = true; // don't auto-kickoff for a loaded one
-    setRun(null); setSaveMsg(null);
+    // A resumed pattern already has its rules; don't auto-start a conversation.
+    setMessages([]); setResearchedFor(s.name);
+    setRun(null); setSaveMsg(null); setEditing(null);
     setStep(3); // resume straight at the patterns review
   }
 
@@ -274,7 +358,47 @@ export default function Builder() {
   function startOver() {
     setName(""); setDescription(""); setCurrentKey(null);
     setRules([]); setMinSignals(1); setRun(null); setSaveMsg(null);
-    setMessages([]); kickedOff.current = false; setStep(1);
+    setMessages([]); setResearchedFor(null); setEditing(null); setStep(1);
+  }
+
+  /* Export / import — a portable copy of everything saved, so research survives
+   * a server rebuild regardless of where the backend stores it. */
+  async function exportAll() {
+    try {
+      const r = await fetch("/api/builder/export");
+      const data = await r.json();
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "pattern-builder-export.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setSaveMsg({ ok: false, text: "Couldn't export — is the API running?" });
+    }
+  }
+
+  async function importFile(file) {
+    if (!file) return;
+    setSaveMsg(null);
+    try {
+      const payload = JSON.parse(await file.text());
+      const items = Array.isArray(payload) ? payload : (payload.items || []);
+      if (!items.length) { setSaveMsg({ ok: false, text: "That file has no patterns in it." }); return; }
+      const r = await fetch("/api/builder/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { setSaveMsg({ ok: false, text: data.detail || "Import failed." }); return; }
+      const skipped = data.failed?.length ? ` ${data.failed.length} skipped.` : "";
+      setSaveMsg({ ok: true, text: `Imported ${data.n_imported} pattern(s).${skipped}` });
+      loadSaved();
+    } catch {
+      setSaveMsg({ ok: false, text: "That doesn't look like a Pattern Builder export." });
+    }
   }
 
   async function runOnData() {
@@ -360,9 +484,25 @@ export default function Builder() {
             </div>
           </div>
 
-          {saved.length > 0 && (
-            <div className="bldcard">
-              <h3>…or resume a saved pattern</h3>
+          <div className="bldcard">
+            <div className="bldcard-head">
+              <h3>{saved.length > 0 ? "…or resume a saved pattern" : "Saved patterns"}</h3>
+              <div className="bldio">
+                <button className="bldghost" onClick={exportAll} disabled={!saved.length}
+                  title="Download every saved pattern as JSON">
+                  <Icon name="download" />Export
+                </button>
+                <button className="bldghost" onClick={() => importRef.current?.click()}
+                  title="Restore patterns from an exported JSON file">
+                  <Icon name="upload" />Import
+                </button>
+                <input ref={importRef} type="file" accept="application/json,.json" hidden
+                  onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ""; }} />
+              </div>
+            </div>
+            {saved.length === 0 ? (
+              <div className="bldempty">Nothing saved yet — build your first pattern above, or import an export.</div>
+            ) : (
               <ul className="bldsaved">
                 {saved.map((s) => (
                   <li key={s.key} onClick={() => loadSyndrome(s)}>
@@ -374,8 +514,18 @@ export default function Builder() {
                   </li>
                 ))}
               </ul>
-            </div>
-          )}
+            )}
+            {storage && (
+              <div className="bldhint">
+                {storage === "motherduck"
+                  ? "Stored in the cloud database — these survive a redeploy."
+                  : "Stored on this server's disk. If it's redeployed they're gone, so export a copy you care about."}
+              </div>
+            )}
+            {saveMsg && step === 1 && (
+              <div className={`bldnote ${saveMsg.ok ? "ok" : "err"}`}>{saveMsg.text}</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -410,8 +560,14 @@ export default function Builder() {
               {messages.map((m, i) => (
                 <div key={i} className={`bldmsg ${m.role}`}>
                   {m.role === "model" && <span className="bldmavatar"><Icon name="smart_toy" /></span>}
-                  <div className="bldbubble">
+                  <div className={`bldbubble ${m.failed ? "failed" : ""}`}>
                     <div className="bldtext">{renderText(m.text)}</div>
+
+                    {m.failed && (
+                      <button className="bldretry" onClick={() => retrySend(m, i)} disabled={chatLoading}>
+                        <Icon name="refresh" />Try again
+                      </button>
+                    )}
 
                     {(m.proposals || []).length > 0 && (
                       <div className="bldprops">
@@ -455,7 +611,13 @@ export default function Builder() {
               {chatLoading && (
                 <div className="bldmsg model">
                   <span className="bldmavatar"><Icon name="smart_toy" /></span>
-                  <div className="bldbubble"><div className="bldtyping"><span /><span /><span /></div></div>
+                  <div className="bldbubble">
+                    <div className="bldtyping"><span /><span /><span /></div>
+                    <div className="bldsearching">
+                      Searching the literature — this can take up to a minute.
+                      <button className="bldcancel" onClick={cancelSend}>Cancel</button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -463,9 +625,15 @@ export default function Builder() {
             <div className="bldchat-input">
               <textarea rows={1} value={input} placeholder="Discuss, refine, or ask for more evidence…"
                 onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} disabled={chatLoading} />
-              <button onClick={() => send()} disabled={chatLoading || !input.trim()} aria-label="Send">
-                <Icon name="send" />
-              </button>
+              {chatLoading ? (
+                <button className="stop" onClick={cancelSend} aria-label="Stop">
+                  <Icon name="stop_circle" />
+                </button>
+              ) : (
+                <button onClick={() => send()} disabled={!input.trim()} aria-label="Send">
+                  <Icon name="send" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -493,22 +661,68 @@ export default function Builder() {
               <div className="bldempty">No patterns yet. Go back to co-research, or add one manually below.</div>
             ) : (
               <ul className="bldrules">
-                {rules.map((r) => (
-                  <li key={ruleKey(r)} className="bldrule">
-                    <span className="bldpillwrap">
-                      <span className={`bldpill ${r.direction}`}>{r.name} {dirLabel(r.direction)}</span>
-                      {!r.in_dataset && <span className="bldtag-ro" title="Not in the dataset — saved for research, not tested on patient data">research-only</span>}
-                    </span>
-                    <div className="bldrule-body">
-                      {r.rationale && <div className="bldrule-rat">{r.rationale}</div>}
-                      {r.evidence && <div className="bldevidence"><Icon name="menu_book" /><span>{r.evidence}</span></div>}
-                      <Citation citation={r.citation} />
-                    </div>
-                    <button className="bldrm" onClick={() => removeRule(r)} aria-label="Remove pattern">
-                      <Icon name="close" />
-                    </button>
-                  </li>
-                ))}
+                {rules.map((r) => {
+                  const key = ruleKey(r);
+                  const open = editing === key;
+                  return (
+                    <li key={key} className={`bldrule ${open ? "editing" : ""}`}>
+                      <span className="bldpillwrap">
+                        <span className={`bldpill ${r.direction}`}>{r.name} {dirLabel(r.direction)}</span>
+                        {!r.in_dataset && <span className="bldtag-ro" title="Not in the dataset — saved for research, not tested on patient data">research-only</span>}
+                        {isUncited(r) && <span className="bldtag-un" title="No source attached — add one so this rule is as evidence-backed as the rest">uncited</span>}
+                      </span>
+
+                      {open ? (
+                        <div className="bldrule-edit">
+                          <label>Direction
+                            <select value={r.direction}
+                              onChange={(e) => changeDirection(r, e.target.value)}>
+                              <option value="high">↑ High</option>
+                              <option value="low">↓ Low</option>
+                            </select>
+                          </label>
+                          <label>Rationale
+                            <textarea rows={2} value={r.rationale} placeholder="One plain sentence: why this lab, this direction?"
+                              onChange={(e) => updateRule(key, { rationale: e.target.value })} />
+                          </label>
+                          <label>Evidence
+                            <textarea rows={3} value={r.evidence} placeholder="What the source actually says, so a reader can decide without opening it."
+                              onChange={(e) => updateRule(key, { evidence: e.target.value })} />
+                          </label>
+                          <div className="bldrule-cite">
+                            <label>Source title
+                              <input value={r.citation?.title || ""} placeholder="e.g. KDIGO AKI Guideline"
+                                onChange={(e) => updateCitation(key, { title: e.target.value })} />
+                            </label>
+                            <label>Source URL
+                              <input value={r.citation?.url || ""} placeholder="https://…"
+                                onChange={(e) => updateCitation(key, { url: e.target.value })} />
+                            </label>
+                          </div>
+                          <button className="bldghost" onClick={() => setEditing(null)}>
+                            <Icon name="check" />Done
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="bldrule-body">
+                          {r.rationale && <div className="bldrule-rat">{r.rationale}</div>}
+                          {r.evidence && <div className="bldevidence"><Icon name="menu_book" /><span>{r.evidence}</span></div>}
+                          <Citation citation={r.citation} />
+                        </div>
+                      )}
+
+                      <div className="bldrule-acts">
+                        <button className="bldrm" onClick={() => setEditing(open ? null : key)}
+                          aria-label={open ? "Close editor" : "Edit pattern"} title="Edit this rule">
+                          <Icon name={open ? "expand_less" : "edit"} />
+                        </button>
+                        <button className="bldrm" onClick={() => removeRule(r)} aria-label="Remove pattern">
+                          <Icon name="close" />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
 
@@ -565,6 +779,11 @@ export default function Builder() {
               <button className="bldghost" onClick={startOver}><Icon name="restart_alt" />Start over</button>
             </div>
             {saveMsg && <div className={`bldnote ${saveMsg.ok ? "ok" : "err"}`}>{saveMsg.text}</div>}
+            <div className="bldhint">
+              Saved patterns are checked against every patient — a match shows up
+              as a card on their Patient Monitoring page.
+              {storage === "file" && " They're stored on this server only, so keep a copy with Export."}
+            </div>
           </div>
 
           {run && (
@@ -587,20 +806,28 @@ export default function Builder() {
                     </div>
                   )}
                   {run.examples?.length > 0 ? (
-                    <table className="bldtable">
-                      <thead><tr><th>Patient</th><th>Admission</th><th>Matched labs</th></tr></thead>
-                      <tbody>
-                        {run.examples.map((m) => (
-                          <tr key={`${m.subject_id}-${m.hadm_id}`}>
-                            <td>{m.subject_id}</td>
-                            <td>{m.hadm_id}</td>
-                            <td>{m.matched.map((h) => (
-                              <span key={h.itemid} className={`bldtag ${h.direction}`}>{h.name} {h.value}</span>
-                            ))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <>
+                      <table className="bldtable">
+                        <thead><tr><th>Patient</th><th>Admission</th><th>Matched labs</th><th /></tr></thead>
+                        <tbody>
+                          {run.examples.map((m) => (
+                            <tr key={`${m.subject_id}-${m.hadm_id}`}
+                              className={onOpenPatient ? "clickable" : ""}
+                              onClick={() => onOpenPatient?.(m.subject_id, m.hadm_id)}>
+                              <td>{m.subject_id}</td>
+                              <td>{m.hadm_id}</td>
+                              <td>{m.matched.map((h) => (
+                                <span key={h.itemid} className={`bldtag ${h.direction}`}>{h.name} {h.value}</span>
+                              ))}</td>
+                              <td className="bldgo">{onOpenPatient && <Icon name="arrow_forward" />}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {onOpenPatient && (
+                        <div className="bldhint">Click a row to open that patient in Patient Monitoring.</div>
+                      )}
+                    </>
                   ) : <div className="bldempty">No admissions matched this rule set.</div>}
                   {run.n_matched > (run.examples?.length || 0) && (
                     <div className="bldhint">Showing the top {run.examples.length} of {run.n_matched} matches.</div>

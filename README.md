@@ -122,7 +122,8 @@ The system follows a **pipeline architecture**: data flows from ingestion throug
 5. **Lead-Time Analysis** — quantifies how many hours *ahead* the trend signal fires versus MIMIC's own abnormal `FLAG` — the scientific core of the project ([`lead_time.py`](deterioration-detector/src/analysis/lead_time.py)).
 6. **Detector Evaluation** — scores our anomaly detector against MIMIC's `FLAG` column as ground truth ([`evaluation.py`](deterioration-detector/src/analysis/evaluation.py)).
 7. **Scoring Rule Book** — a transparent, source-cited summary of how every score is decided, assembled *live* from the scoring engine's own constants so it can never drift from the code ([`rules.py`](deterioration-detector/src/analysis/rules.py)).
-8. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
+8. **Pattern Builder** — lets a researcher name a candidate syndrome and agree, with an AI co-worker that searches live literature, on a set of **cited** lab rules; the rule set can be tried against the whole cohort and, once saved, is evaluated on every patient alongside the built-in syndromes ([`custom_syndromes.py`](deterioration-detector/src/analysis/custom_syndromes.py), [`builder.py`](deterioration-detector/src/api/builder.py)).
+9. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
 
 ---
 
@@ -240,7 +241,12 @@ docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
 | `GET /api/lead-time` | How many hours ahead the trend signal fires before the first abnormal flag. |
 | `GET /api/rules` | The cited scoring rule book: reference ranges, classification bands, point math, risk categories, and syndrome definitions, each tagged with a published source. |
 | `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). |
-| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes. |
+| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes — built-in **and** any saved Pattern Builder pattern that matches. |
+| `GET /api/builder/labs` · `/catalog` | The 8 testable labs, and the full ~700-lab catalog behind the pick-list. |
+| `GET·POST /api/builder/syndromes` · `DELETE /{key}` | List, save and delete user-built patterns. |
+| `GET /api/builder/export` · `POST /api/builder/import` | Download every saved pattern as JSON, and restore one. |
+| `POST /api/builder/research` | One AI co-research turn: live web search → prose reply plus cited rule proposals. |
+| `POST /api/builder/run` | Apply a rule set across the whole cohort and report which admissions match. |
 
 ---
 
@@ -278,6 +284,23 @@ The **Scoring Rule Book** tab is the dashboard's "show your work" page. Because 
 6. **Sources** — every rule is tagged with a published reference (NEJM laboratory reference values, KDIGO, Sepsis-3, NEWS2). The parts that are this prototype's own scaling choices are honestly labelled *"engine heuristic,"* not attributed to a guideline.
 
 The page is served by [`GET /api/rules`](#-api-endpoints), assembled **live from the scoring engine's own constants** ([`rules.py`](deterioration-detector/src/analysis/rules.py)) — so what you read can never drift from the code that actually scores patients.
+
+### 🛠️ Pattern Builder
+
+The other tabs show patterns *we* defined. The **Pattern Builder** tab lets you define your own, in three steps:
+
+1. **Choose a disease or syndrome** — anything you want to investigate.
+2. **Co-research it with the AI** — the co-pilot searches real literature through OpenAI's hosted `web_search` tool and proposes rules, each one lab moving in one direction, with a plain rationale and a citation. It summarises what each source *says* directly in the chat, so you can judge a proposal without opening the link. A search takes up to a minute and can be cancelled or retried.
+3. **Review the rule set** — add rules by hand from a searchable catalog of ~700 labs, edit any rule's direction, rationale, evidence or citation, set how many rules must fire, then **run it across all 8,304 admissions**. Click any result to jump straight to that patient.
+
+Two things make a saved pattern real rather than a toy:
+
+- **It is applied to every patient.** A saved pattern is evaluated on each admission alongside the built-in syndromes and appears on the Patient Monitoring page as a card marked **Custom**, carrying its citations.
+- **It is honest about what it tested.** Only the 8 tracked labs exist in this dataset. A rule over any other lab is kept as *research-only*: saved, cited and displayed, but never counted as a match — the pattern card and the cohort run both say so explicitly.
+
+Patterns are stored in the cloud database when `MOTHERDUCK_TOKEN` is set (so they survive a redeploy) and in a local JSON file otherwise; the tab tells you which. **Export** / **Import** move them between the two as a JSON file.
+
+> Requires `OPENAI_API_KEY` for step 2 only. Without it the tab still opens and says the co-pilot is unavailable — steps 1 and 3 work as normal.
 
 ---
 
