@@ -3,20 +3,24 @@ Tests for the Pattern Builder engine (src/analysis/custom_syndromes):
 rule cleaning/validation, JSON persistence, and applying a custom rule set to a
 (faked) cohort. Run:  pytest -q
 """
-import pathlib
-
 import pytest
 
 import src.analysis.custom_syndromes as cs
+import src.storage.pattern_store as ps
+from src.analysis.risk_score import LabState
 
 CREATININE = 50912   # normal 0.6-1.2
 UREA = 51006         # normal 7-20
+POTASSIUM = 50971    # normal 3.5-5.1
 
 
 @pytest.fixture(autouse=True)
 def temp_store(tmp_path, monkeypatch):
-    """Redirect the JSON store to a temp file so tests never touch real data."""
-    monkeypatch.setattr(cs, "STORE", tmp_path / "custom_syndromes.json")
+    """Redirect the store to a temp JSON file so tests never touch real data --
+    and never reach for MotherDuck, whatever the developer's env happens to have
+    set."""
+    monkeypatch.delenv("MOTHERDUCK_TOKEN", raising=False)
+    monkeypatch.setattr(ps, "STORE", tmp_path / "custom_syndromes.json")
     yield
 
 
@@ -161,3 +165,110 @@ def test_run_all_research_only_matches_nothing():
     out = cs.run_on_cohort(FakeCon([], total=5), signals, min_signals=1)
     assert out["n_runnable"] == 0 and out["n_matched"] == 0
     assert "can't be tested on patient data" in out["note"]
+
+
+# ---- lab-name resolution against the full catalog ----
+def test_resolve_lab_matches_the_catalog_regardless_of_word_order():
+    """"Total Bilirubin" and the catalog's "Bilirubin, Total" are the same test."""
+    iid, name, in_ds = cs.resolve_lab(None, "Total Bilirubin")
+    assert iid is None and in_ds is False
+    assert name == "Bilirubin, Total"   # normalised to the catalog's own name
+
+
+def test_resolve_lab_keeps_an_unrecognised_name_verbatim():
+    iid, name, in_ds = cs.resolve_lab(None, "Vibes Panel")
+    assert iid is None and name == "Vibes Panel" and in_ds is False
+
+
+# ---- persistence backend ----
+def test_pattern_store_defaults_to_the_json_file():
+    assert ps.backend_name() == "file"
+    ps.write_all({"k": {"key": "k", "name": "Kept"}})
+    assert ps.read_all()["k"]["name"] == "Kept"
+
+
+def test_pattern_store_reads_empty_when_the_file_is_corrupt(monkeypatch):
+    ps.STORE.parent.mkdir(parents=True, exist_ok=True)
+    ps.STORE.write_text("{not json", encoding="utf-8")
+    assert ps.read_all() == {}
+
+
+# ---- detection on one admission (what the monitoring page renders) ----
+def _state(itemid, value, series=None, name="Lab", unit="u"):
+    return LabState(itemid=itemid, test_name=name, unit=unit,
+                    latest_value=value, series=series or [value])
+
+
+def test_detect_custom_fires_and_matches_the_builtin_card_shape():
+    cs.save_custom("Kidney Watch", "Waste products building up.", [
+        {"itemid": CREATININE, "direction": "high",
+         "citation": {"title": "KDIGO", "url": "https://kdigo.org"}},
+        {"itemid": UREA, "direction": "high"},
+    ], min_signals=2)
+
+    out = cs.detect_custom([_state(CREATININE, 3.0), _state(UREA, 40.0)])
+    assert len(out) == 1
+    card = out[0]
+    # the same keys detect_syndromes() emits, so one card component renders both
+    assert {"key", "name", "plain", "severity", "confidence",
+            "worsening", "matched", "missing"} <= card.keys()
+    assert card["custom"] is True
+    assert card["plain"] == "Waste products building up."
+    assert card["confidence"] == 100
+    assert card["citations"] == [{"title": "KDIGO", "url": "https://kdigo.org"}]
+    assert {m["itemid"] for m in card["matched"]} == {CREATININE, UREA}
+
+
+def test_detect_custom_stays_silent_below_the_threshold():
+    cs.save_custom("Strict", "", [
+        {"itemid": CREATININE, "direction": "high"},
+        {"itemid": UREA, "direction": "high"},
+    ], min_signals=2)
+    # only creatinine is out of range, so a 2-of-2 pattern must not fire
+    assert cs.detect_custom([_state(CREATININE, 3.0), _state(UREA, 10.0)]) == []
+
+
+def test_detect_custom_lists_unmatched_rules_as_missing():
+    cs.save_custom("Loose", "", [
+        {"itemid": CREATININE, "direction": "high"},
+        {"itemid": UREA, "direction": "high"},
+    ], min_signals=1)
+    card = cs.detect_custom([_state(CREATININE, 3.0), _state(UREA, 10.0)])[0]
+    assert [m["itemid"] for m in card["matched"]] == [CREATININE]
+    assert [m["itemid"] for m in card["missing"]] == [UREA]
+    assert card["confidence"] == 50
+
+
+def test_detect_custom_reports_research_only_rules_separately():
+    """A lab the dataset doesn't carry must never count as matched — but the card
+    should still say it is part of the pattern."""
+    cs.save_custom("Mixed", "", [
+        {"itemid": CREATININE, "direction": "high"},
+        {"name": "Bilirubin", "direction": "high"},
+    ], min_signals=2)
+    card = cs.detect_custom([_state(CREATININE, 3.0)])[0]
+    assert [r["name"] for r in card["research_only"]] == ["Bilirubin"]
+    assert all(m["itemid"] == CREATININE for m in card["matched"])
+    assert card["confidence"] == 100  # 1 of 1 testable rule; threshold capped to 1
+
+
+def test_detect_custom_skips_patterns_with_nothing_testable():
+    cs.save_custom("Untestable", "", [{"name": "Bilirubin", "direction": "high"}], 1)
+    assert cs.detect_custom([_state(CREATININE, 3.0)]) == []
+
+
+def test_detect_custom_flags_critical_and_worsening():
+    cs.save_custom("Rising", "", [{"itemid": CREATININE, "direction": "high"}], 1)
+    card = cs.detect_custom([_state(CREATININE, 6.0, series=[1.0, 3.0, 6.0])])[0]
+    assert card["severity"] == "critical"
+    assert card["worsening"] is True
+
+
+def test_detect_custom_writes_a_plain_summary_when_none_was_given():
+    cs.save_custom("No Description", "", [{"itemid": POTASSIUM, "direction": "high"}], 1)
+    card = cs.detect_custom([_state(POTASSIUM, 7.0)])[0]
+    assert "Potassium" in card["plain"] and "above" in card["plain"]
+
+
+def test_detect_custom_returns_nothing_when_no_patterns_are_saved():
+    assert cs.detect_custom([_state(CREATININE, 9.0)]) == []

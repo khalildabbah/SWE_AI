@@ -5,13 +5,16 @@ The "Pattern Builder" tab lets a researcher/clinician name a candidate syndrome
 and agree, with an AI co-worker that searches the literature, on a set of CITED
 pattern rules over the 8 tracked labs. Those saved definitions live here.
 
-Two responsibilities:
-  * Persistence — custom syndromes are stored as a small JSON file next to the
-    data, NOT in the DuckDB. The DB is opened read-only (and may be the shared
-    MotherDuck cloud copy that scripts rebuild), so a side file is the safe,
-    durable home for user-authored content.
+Three responsibilities:
+  * Persistence — delegated to `src.storage.pattern_store`, which keeps patterns
+    in the MotherDuck cloud database when one is configured and in a local JSON
+    file otherwise. Either way they live outside the read-only labs DB that the
+    build scripts rebuild.
   * Execution — `run_on_cohort()` applies a custom rule set across every
     admission so the user can immediately see how many real patients match.
+  * Detection — `detect_custom()` evaluates every saved pattern against ONE
+    admission, in the same shape the built-in syndromes use, so user-built
+    patterns show up on the patient monitoring page next to the built-in ones.
 
 A custom syndrome mirrors the built-in `SyndromeDef` shape (name + signals +
 min_signals) but each signal additionally carries the rationale and citation the
@@ -19,15 +22,14 @@ user agreed on, so the saved definition stays evidence-linked.
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
+from src.analysis.abnormal import classify, CRITICAL
+from src.analysis.lab_catalog import load_catalog
+from src.analysis.trends import trend, WORSENING
 from src.ingestion.lab_dictionary import LAB_DEFS
-
-ROOT = Path(__file__).resolve().parents[2]
-STORE = ROOT / "data" / "custom_syndromes.json"
+from src.storage import pattern_store
 
 HIGH, LOW = "high", "low"
 VALID_ITEMIDS = set(LAB_DEFS.keys())
@@ -47,12 +49,40 @@ _LAB_ALIASES = {
 }
 
 
+def _norm(name: str) -> str:
+    """A word-order- and punctuation-insensitive key for a lab name.
+
+    MIMIC and the literature disagree on how to write the same test:
+    "Bilirubin, Total" vs "Total Bilirubin". Lowercasing, dropping punctuation
+    and sorting the words folds both into "bilirubin total" so they match.
+    """
+    words = re.findall(r"[a-z0-9]+", (name or "").lower())
+    return " ".join(sorted(words))
+
+
+_CATALOG_BY_NORM: dict | None = None
+
+
+def _catalog_by_norm() -> dict:
+    """{normalised name: catalog lab}, built once. Most-measured lab wins a
+    collision, since load_catalog() returns them in that order."""
+    global _CATALOG_BY_NORM
+    if _CATALOG_BY_NORM is None:
+        index = {}
+        for lab in load_catalog():
+            index.setdefault(_norm(lab["label"]), lab)
+        _CATALOG_BY_NORM = index
+    return _CATALOG_BY_NORM
+
+
 def resolve_lab(itemid, lab_name: str = "") -> tuple:
     """Map a (itemid, name) pair to (itemid|None, display_name, in_dataset).
 
     A lab is "in dataset" (runnable on patient data) if it is one of the 8
-    tracked labs — matched by itemid, exact name, or a common alias. Any other
-    lab is kept as a research-only pattern with itemid=None.
+    tracked labs — matched by itemid, exact name, or a common alias. Anything
+    else that we can recognise in the lab catalog comes back under its canonical
+    catalog name; anything we can't is kept verbatim. Both are research-only
+    patterns with itemid=None.
     """
     if itemid is not None and str(itemid).strip() != "":
         try:
@@ -63,15 +93,26 @@ def resolve_lab(itemid, lab_name: str = "") -> tuple:
             return cand, LAB_DEFS[cand].name, True
 
     key = (lab_name or "").strip()
-    if key:
-        for iid, d in LAB_DEFS.items():
-            if d.name.lower() == key.lower():
-                return iid, d.name, True
-        alias = _LAB_ALIASES.get(key.lower())
-        if alias is not None:
-            return alias, LAB_DEFS[alias].name, True
-        return None, key, False  # a real lab, just not in our dataset
-    return None, "", False
+    if not key:
+        return None, "", False
+
+    for iid, d in LAB_DEFS.items():
+        if d.name.lower() == key.lower():
+            return iid, d.name, True
+    alias = _LAB_ALIASES.get(key.lower())
+    if alias is not None:
+        return alias, LAB_DEFS[alias].name, True
+
+    # Not one of the 8 by name — try the full lab catalog, tolerating word order
+    # ("Total Bilirubin" -> "Bilirubin, Total"). A catalog hit that turns out to
+    # be tracked after all still becomes a runnable pattern.
+    lab = _catalog_by_norm().get(_norm(key))
+    if lab is not None:
+        if lab["itemid"] in VALID_ITEMIDS:
+            return lab["itemid"], LAB_DEFS[lab["itemid"]].name, True
+        return None, lab["label"], False
+
+    return None, key, False  # a real lab, just not one we know
 
 
 def _now_iso() -> str:
@@ -96,18 +137,11 @@ def available_labs() -> list[dict]:
 # ── Persistence ────────────────────────────────────────────────────────────
 
 def _read_store() -> dict:
-    if not STORE.exists():
-        return {}
-    try:
-        data = json.loads(STORE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return pattern_store.read_all()
 
 
 def _write_store(data: dict) -> None:
-    STORE.parent.mkdir(parents=True, exist_ok=True)
-    STORE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    pattern_store.write_all(data)
 
 
 def list_custom() -> list[dict]:
@@ -196,6 +230,100 @@ def delete_custom(key: str) -> bool:
         _write_store(store)
         return True
     return False
+
+
+# ── Detection on a single admission ──────────────────────────────────────────
+
+def _plain_summary(record: dict, signals: list[dict]) -> str:
+    """The one-line explanation shown on the pattern card. Prefer what the user
+    wrote; otherwise describe the rule set in plain words."""
+    described = (record.get("description") or "").strip()
+    if described:
+        return described
+    parts = [f"{s['name']} {'above' if s['direction'] == HIGH else 'below'} its normal range"
+             for s in signals]
+    if len(parts) == 1:
+        return f"A user-built pattern: {parts[0]}."
+    return ("A user-built pattern, fired when at least "
+            f"{record.get('min_signals', 1)} of these are true: " + "; ".join(parts) + ".")
+
+
+def detect_custom(states: list) -> list[dict]:
+    """
+    Match every saved custom pattern against the per-lab state of ONE admission.
+
+    Deliberately mirrors `syndromes.detect_syndromes()`: same input (the
+    list[LabState] the risk score consumes) and the same output shape, so the
+    dashboard renders a user-built pattern with exactly the same card as a
+    built-in one. Three extra keys carry what only custom patterns have:
+      custom=True, `citations` (the evidence behind the rules) and
+      `research_only` (rules over labs this dataset doesn't carry, listed so the
+      card is honest about what was actually checked).
+
+    Patterns whose rules are ALL research-only are skipped entirely — there is
+    nothing to evaluate, so claiming a result would be misleading.
+    """
+    by_id = {st.itemid: st for st in states}
+    results: list[dict] = []
+
+    for record in list_custom():
+        signals = _clean_signals(record.get("signals") or [])
+        runnable = [s for s in signals if s["in_dataset"] and s["itemid"] is not None]
+        if not runnable:
+            continue
+
+        matched, missing = [], []
+        any_critical = any_worsening = False
+        for sig in runnable:
+            st = by_id.get(sig["itemid"])
+            if st is not None and _out_of_range(sig["itemid"], st.latest_value, sig["direction"]):
+                status = classify(sig["itemid"], st.latest_value)
+                tr = trend(sig["itemid"], st.series)
+                any_critical = any_critical or status == CRITICAL
+                any_worsening = any_worsening or tr == WORSENING
+                matched.append({
+                    "itemid": sig["itemid"], "test_name": st.test_name, "unit": st.unit,
+                    "value": st.latest_value, "direction": sig["direction"],
+                    "status": status, "trend": tr,
+                    "rationale": sig["rationale"], "citation": sig["citation"],
+                })
+            else:
+                missing.append({"itemid": sig["itemid"], "test_name": sig["name"],
+                                "direction": sig["direction"]})
+
+        # The saved threshold can exceed the number of testable rules; cap it the
+        # same way run_on_cohort() does so the pattern stays evaluable.
+        min_signals = max(1, min(int(record.get("min_signals") or 1), len(runnable)))
+        if len(matched) < min_signals:
+            continue
+
+        seen, citations = set(), []
+        for s in signals:
+            cite = s.get("citation") or {}
+            marker = cite.get("url") or cite.get("title")
+            if marker and marker not in seen:
+                seen.add(marker)
+                citations.append({"title": cite.get("title", ""), "url": cite.get("url", "")})
+
+        results.append({
+            "key": record.get("key", ""),
+            "name": record.get("name", "Custom pattern"),
+            "plain": _plain_summary(record, signals),
+            "severity": "critical" if any_critical else "warning",
+            "confidence": round(100 * len(matched) / len(runnable)),
+            "worsening": any_worsening,
+            "matched": matched,
+            "missing": missing,
+            "custom": True,
+            "citations": citations,
+            "research_only": [
+                {"name": s["name"], "direction": s["direction"], "citation": s["citation"]}
+                for s in signals if not (s["in_dataset"] and s["itemid"] is not None)
+            ],
+        })
+
+    results.sort(key=lambda r: (r["confidence"], r["severity"] == "critical"), reverse=True)
+    return results
 
 
 # ── Execution against real patient data ──────────────────────────────────────

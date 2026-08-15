@@ -288,7 +288,12 @@ export default function App() {
           ) : page === "rules" ? (
             <RuleBook />
           ) : page === "builder" ? (
-            <Builder />
+            // A run result is only useful if you can go look at the patient it
+            // found, so the builder can hand an admission back to Monitoring.
+            <Builder onOpenPatient={(subject_id, hadm_id) => {
+              setSelected({ subject_id, hadm_id });
+              setPage("monitoring");
+            }} />
           ) : (
             <>
               {detailError && <div className="placeholder err">Couldn't load this patient — is the API running?</div>}
@@ -547,11 +552,16 @@ function Monitoring({ d, meta }) {
 function SyndromeCard({ s }) {
   const dirArrow = { high: "↑", low: "↓" };
   return (
-    <div className={`syncard ${s.severity}`}>
+    <div className={`syncard ${s.severity} ${s.custom ? "custom" : ""}`}>
       <div className="synhead">
         <div className="syntitle">
-          <Icon name={s.severity === "critical" ? "emergency" : "warning"} />
+          <Icon name={s.custom ? "construction" : s.severity === "critical" ? "emergency" : "warning"} />
           <span className="name">{s.name}</span>
+          {s.custom && (
+            <span className="synbadge" title="Built in the Pattern Builder, not a built-in syndrome">
+              Custom
+            </span>
+          )}
         </div>
       </div>
       <div className="synplain">{s.plain}</div>
@@ -571,7 +581,25 @@ function SyndromeCard({ s }) {
             {m.test_name}<span className="sv">—</span>
           </span>
         ))}
+        {(s.research_only || []).map((r) => (
+          <span key={`ro-${r.name}-${r.direction}`} className="signal untested"
+            title={`${r.name} (${r.direction}) is part of this pattern but isn't measured in this dataset, so it wasn't checked`}>
+            {r.name}<span className="sv">n/a</span>
+          </span>
+        ))}
       </div>
+      {(s.citations || []).length > 0 && (
+        <div className="syncites">
+          <Icon name="menu_book" />
+          {s.citations.map((c, i) => (
+            c.url
+              ? <a key={i} href={c.url} target="_blank" rel="noreferrer" title={c.title || c.url}>
+                  {c.title || c.url}
+                </a>
+              : <span key={i}>{c.title}</span>
+          ))}
+        </div>
+      )}
       {s.worsening && (
         <div className="synfoot"><Icon name="trending_up" />Contributing labs are trending worse</div>
       )}
