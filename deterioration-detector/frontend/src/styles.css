@@ -951,3 +951,69 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .bldsaved li.active { border-color: var(--primary); background: var(--surface-high); }
 .bldsaved-name { font-size: 13px; font-weight: 600; color: var(--on-surface); }
 .bldsaved-meta { font-size: 11px; color: var(--outline); margin-top: 2px; }
+
+/* ── Pattern Builder: rule editing, cancel/retry, export, click-through ── */
+
+/* a rule with no source attached — the one thing this tool is meant to avoid */
+.bldtag-un { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 999px; color: var(--outline);
+  background: var(--surface-highest); border: 1px dashed var(--outline-variant); white-space: nowrap; }
+
+.bldrule-acts { display: flex; gap: 2px; flex-shrink: 0; }
+.bldrule-acts .bldrm:hover { color: var(--primary); }
+.bldrule-acts .bldrm:last-child:hover { color: var(--error); }
+.bldrule.editing { flex-wrap: wrap; border-color: var(--primary); }
+.bldrule-edit { flex-basis: 100%; order: 3; display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.bldrule-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.03em; color: var(--outline); font-weight: 600; }
+.bldrule-edit input, .bldrule-edit textarea, .bldrule-edit select {
+  background: var(--surface); color: var(--on-surface); border: 1px solid var(--outline-variant);
+  border-radius: var(--radius); padding: 7px 9px; font-size: 12.5px; font-family: inherit;
+  text-transform: none; letter-spacing: normal; font-weight: 400; }
+.bldrule-edit textarea { resize: vertical; line-height: 1.45; }
+.bldrule-edit input:focus, .bldrule-edit textarea:focus, .bldrule-edit select:focus {
+  outline: none; border-color: var(--primary); }
+.bldrule-edit select { max-width: 140px; }
+.bldrule-cite { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 720px) { .bldrule-cite { grid-template-columns: 1fr; } }
+.bldrule-edit > .bldghost { align-self: flex-start; }
+
+/* an errored/cancelled turn, and the way back from it */
+.bldbubble.failed { border-color: var(--error); }
+.bldretry { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-size: 12px;
+  cursor: pointer; background: var(--surface-highest); color: var(--on-surface);
+  border: 1px solid var(--outline-variant); border-radius: var(--radius); padding: 4px 9px; }
+.bldretry:hover { border-color: var(--primary); }
+.bldretry:disabled { opacity: 0.45; cursor: default; }
+.bldretry .material-symbols-outlined { font-size: 15px; }
+
+/* a web-searched turn is slow; say so, and offer a way out */
+.bldsearching { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 6px; font-size: 11.5px; color: var(--outline); }
+.bldcancel { background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--primary); font-size: 11.5px; text-decoration: underline; }
+.bldchat-input button.stop { background: var(--surface-highest); color: var(--on-surface-variant); }
+
+/* export / import */
+.bldio { display: flex; gap: 6px; }
+
+/* run results link through to the patient they found */
+.bldtable tr.clickable { cursor: pointer; }
+.bldtable tr.clickable:hover td { background: var(--surface-low); }
+.bldgo { color: var(--outline); width: 24px; }
+.bldtable tr.clickable:hover .bldgo { color: var(--primary); }
+.bldgo .material-symbols-outlined { font-size: 16px; }
+
+/* ── Patient Monitoring: cards for user-built patterns ── */
+.syncard.custom { border-left-color: var(--primary); }
+.syncard.custom .syntitle .material-symbols-outlined { color: var(--primary); }
+.synbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 999px; color: var(--primary);
+  background: var(--surface-highest); border: 1px solid var(--primary-container); white-space: nowrap; }
+/* part of the pattern, but this dataset can't measure it — never claim it matched */
+.syncard .signal.untested { background: transparent; border: 1px dashed var(--outline-variant);
+  color: var(--outline); font-style: italic; }
+.syncites { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11.5px; color: var(--outline); }
+.syncites .material-symbols-outlined { font-size: 15px; flex-shrink: 0; }
+.syncites a { color: var(--primary); text-decoration: none; }
+.syncites a:hover { text-decoration: underline; }

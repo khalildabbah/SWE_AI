@@ -2,7 +2,9 @@
 data/raw/*.csv
 data/raw/*.xlsx
 data/processed/*.duckdb
-data/custom_syndromes.json  # user-built syndromes (Pattern Builder tab)
+# user-built syndromes (Pattern Builder tab) — git has no inline comments, so
+# this needs its own line or the path is taken literally and never ignored
+data/custom_syndromes.json
 
 # secrets / local config
 .env

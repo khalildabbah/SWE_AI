@@ -17,6 +17,7 @@ from src.analysis.risk_score import LabState, score_admission
 from src.analysis.alerts import build_alerts
 from src.analysis.trajectory import compute_trajectory
 from src.analysis.syndromes import detect_syndromes
+from src.analysis.custom_syndromes import detect_custom
 from src.analysis.evaluation import confusion_metrics
 from src.analysis.lead_time import compute_lead_time
 from src.analysis.rules import build_rules
@@ -215,7 +216,11 @@ def admission_detail(subject_id: int, hadm_id: int):
         "risk": {"score": risk.score, "category": risk.category,
                  "contributions": risk.contributions},
         "alerts": build_alerts(risk),
-        "syndromes": detect_syndromes(states),
+        # Built-in syndromes and the user's own Pattern Builder patterns share a
+        # card on the dashboard, so they share a list and an ordering.
+        "syndromes": sorted(
+            detect_syndromes(states) + detect_custom(states),
+            key=lambda r: (r["confidence"], r["severity"] == "critical"), reverse=True),
         "trajectory": compute_trajectory(series),
         "lead_time": {
             "deteriorated": lt.deteriorated, "concerned": lt.concerned,

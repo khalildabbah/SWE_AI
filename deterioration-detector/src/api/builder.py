@@ -7,9 +7,12 @@ then tries the rule set on real patient data.
 
 Endpoints (all under /api/builder):
   GET    /labs              -> the 8 labs a rule can be built from
+  GET    /catalog           -> every named lab, for the pick-list
   GET    /syndromes         -> saved custom syndromes
   POST   /syndromes         -> create / update a custom syndrome
   DELETE /syndromes/{key}   -> delete one
+  GET    /export            -> every saved syndrome as a portable JSON payload
+  POST   /import            -> merge an exported payload back in
   POST   /research          -> co-work turn: live web search -> reply + cited
                                rule proposals (OpenAI Responses API)
   POST   /run               -> apply a rule set across the cohort, report matches
@@ -34,6 +37,7 @@ from src.analysis.custom_syndromes import (
 )
 from src.analysis.lab_catalog import load_catalog
 from src.ingestion.lab_dictionary import LAB_DEFS
+from src.storage import pattern_store
 
 router = APIRouter(prefix="/api/builder")
 
@@ -130,6 +134,10 @@ class RunRequest(BaseModel):
     min_signals: int = 1
 
 
+class ImportRequest(BaseModel):
+    items: list[SyndromeIn] = []
+
+
 # ── Labs + CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("/labs")
@@ -154,8 +162,12 @@ def catalog():
 
 @router.get("/syndromes")
 def get_syndromes():
-    """All saved custom syndromes (newest first)."""
-    return {"items": list_custom()}
+    """All saved custom syndromes (newest first).
+
+    `storage` tells the UI where they are kept: "motherduck" survives a redeploy,
+    "file" only lasts as long as this container does.
+    """
+    return {"items": list_custom(), "storage": pattern_store.backend_name()}
 
 
 @router.post("/syndromes")
@@ -177,6 +189,40 @@ def remove_syndrome(key: str):
     if not delete_custom(key):
         raise HTTPException(404, "No such custom syndrome.")
     return {"deleted": key}
+
+
+@router.get("/export")
+def export_syndromes():
+    """Every saved pattern as a portable payload the user can download.
+
+    Insurance against an ephemeral store: a researcher can keep their work even
+    if the server it was built on is rebuilt from scratch.
+    """
+    return {"version": 1, "items": list_custom()}
+
+
+@router.post("/import")
+def import_syndromes(body: ImportRequest):
+    """Merge an exported payload back in.
+
+    Every item goes through `save_custom` so an imported file gets exactly the
+    same validation as something built in the UI — a hand-edited export can't
+    smuggle in a malformed rule. Items that fail are reported, not fatal.
+    """
+    imported, failed = [], []
+    for item in body.items:
+        try:
+            record = save_custom(
+                name=item.name, description=item.description,
+                signals=[s.model_dump() for s in item.signals],
+                min_signals=item.min_signals, key=item.key,
+            )
+            imported.append(record["key"])
+        except ValueError as e:
+            failed.append({"name": item.name, "reason": str(e)})
+    if not imported and failed:
+        raise HTTPException(400, f"Nothing could be imported: {failed[0]['reason']}")
+    return {"imported": imported, "n_imported": len(imported), "failed": failed}
 
 
 @router.post("/run")

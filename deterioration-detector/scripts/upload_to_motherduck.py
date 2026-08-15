@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "processed" / "labs.duckdb"
 MD_DATABASE = os.getenv("MOTHERDUCK_DATABASE", "labs")
 
+# Cloud-only tables that a dataset upload must never overwrite.
+PROTECTED_TABLES = {"custom_patterns"}
+
 
 def main() -> None:
     token = os.getenv("MOTHERDUCK_TOKEN")
@@ -43,6 +46,10 @@ def main() -> None:
             "WHERE table_catalog = 'local_db' AND table_schema = 'main'"
         ).fetchall()
     ]
+    # `custom_patterns` holds user-authored Pattern Builder work and lives only
+    # in the cloud. It should never exist locally, but refusing to mirror it
+    # guarantees a dataset refresh can't wipe somebody's saved patterns.
+    tables = [t for t in tables if t not in PROTECTED_TABLES]
     if not tables:
         sys.exit("No tables found in the local database.")
 
