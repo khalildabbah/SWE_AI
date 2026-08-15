@@ -27,8 +27,54 @@ def st(itemid, value, series=None, name="Lab", unit="u"):
                     latest_value=value, series=series or [value])
 
 
-def rule(itemid, direction):
-    return {"itemid": itemid, "name": "", "direction": direction, "in_dataset": True}
+def rule(itemid, direction, threshold=None):
+    return {"itemid": itemid, "name": "", "direction": direction,
+            "in_dataset": True, "threshold": threshold}
+
+
+# ── a rule's own threshold ───────────────────────────────────────────────────
+
+def test_a_rule_defaults_to_the_reference_range():
+    """"High" with no threshold means "above the normal range" — creatinine 1.3
+    is over 1.2 and fires."""
+    r = score_pattern([st(CREATININE, 1.3)], [rule(CREATININE, "high")])
+    assert r.contributions[0]["matched"] is True
+    assert r.contributions[0]["bound"] == 1.2
+
+
+def test_a_stricter_threshold_narrows_what_matches():
+    """The case from the HRS pattern: the evidence says creatinine > 1.5, so 1.3
+    must NOT match even though it is outside the reference range."""
+    r = score_pattern([st(CREATININE, 1.3)], [rule(CREATININE, "high", 1.5)])
+    assert r.contributions[0]["matched"] is False
+    assert r.contributions[0]["bound"] == 1.5
+    assert r.score == 0
+
+    fires = score_pattern([st(CREATININE, 1.6)], [rule(CREATININE, "high", 1.5)])
+    assert fires.contributions[0]["matched"] is True
+
+
+def test_a_looser_threshold_still_scores_at_least_a_point():
+    """A threshold inside the normal range means the rule can fire on a value
+    classify() calls normal — it must not match and score nothing."""
+    r = score_pattern([st(CREATININE, 1.1)], [rule(CREATININE, "high", 1.0)])
+    assert r.contributions[0]["matched"] is True
+    assert r.contributions[0]["points"] == 1
+    assert r.score == 1
+
+
+def test_severity_stays_anchored_to_the_reference_range():
+    """A stricter threshold changes what matches, not how abnormal a value is."""
+    r = score_pattern([st(CREATININE, 6.0)], [rule(CREATININE, "high", 1.5)])
+    assert r.contributions[0]["status"] == "critical"   # not rescaled to 1.5
+    assert r.contributions[0]["points"] == 2
+
+
+def test_a_low_rule_threshold_fires_below_the_number():
+    r = score_pattern([st(WBC, 3.0)], [rule(WBC, "low", 2.0)])
+    assert r.contributions[0]["matched"] is False       # 3.0 is not below 2.0
+    r = score_pattern([st(WBC, 1.5)], [rule(WBC, "low", 2.0)])
+    assert r.contributions[0]["matched"] is True
 
 
 # ── the direction override on trend() ────────────────────────────────────────

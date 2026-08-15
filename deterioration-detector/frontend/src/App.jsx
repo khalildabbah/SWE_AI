@@ -630,7 +630,11 @@ function SyndromeCard({ s }) {
       <div className="synsignals">
         {s.matched.map((m) => (
           <span key={m.itemid} className={`signal ${m.status}`}
-            title={`${m.test_name} ${(+m.value).toPrecision(3) / 1} ${m.unit} — ${m.status}${m.trend === "worsening" ? ", worsening" : ""}`}>
+            title={`${m.test_name} ${(+m.value).toPrecision(3) / 1} ${m.unit} — ${m.status}${m.trend === "worsening" ? ", worsening" : ""}`
+              + (m.bound != null
+                ? `. Rule fires ${m.direction === "high" ? ">" : "<"} ${m.bound} ${m.unit}`
+                  + (m.threshold != null ? " (this rule's own threshold)" : " (edge of the normal range)")
+                : "")}>
             {GLOSSARY[m.test_name]
               ? <Tip text={GLOSSARY[m.test_name]}>{m.test_name}</Tip>
               : m.test_name}

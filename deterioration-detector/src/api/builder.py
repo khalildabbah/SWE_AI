@@ -34,7 +34,7 @@ from src.storage.db import connect
 from src.storage import pattern_risk
 from src.analysis.custom_syndromes import (
     available_labs, list_custom, get_custom, save_custom, delete_custom,
-    run_on_cohort, resolve_lab,
+    run_on_cohort, resolve_lab, _clean_threshold,
 )
 from src.analysis.lab_catalog import load_catalog
 from src.ingestion.lab_dictionary import LAB_DEFS
@@ -70,6 +70,13 @@ Each pattern rule is exactly: ONE lab, moving in ONE direction
 ("high" = above normal range, "low" = below normal range), with a short plain
 rationale, an inline evidence synopsis, and a real citation.
 
+A rule may also carry a THRESHOLD — the numeric value it fires at, in the lab's
+own units. Give one whenever the literature states a specific cut-off (e.g. the
+HRS criterion "serum creatinine > 1.5 mg/dL"), because otherwise the rule fires
+merely at the edge of the normal reference range, which is usually far looser
+than the diagnostic criterion and matches far more patients than the syndrome
+does. Omit it only when the source really is qualitative ("elevated", "low").
+
 HOW TO WORK:
 - Use the web_search tool to ground every proposal in actual literature
   (guidelines, review articles, primary studies). Prefer authoritative sources
@@ -85,7 +92,10 @@ HOW TO WORK:
   with this exact shape:
   {{"proposals": [
      {{"lab": "<lab name>", "itemid": <real itemid if it is one of the 8 above,
-       else null>, "direction": "high"|"low", "rationale": "<one sentence, plain>",
+       else null>, "direction": "high"|"low",
+       "threshold": <number in the lab's units if the source states a cut-off,
+                     else null>,
+       "rationale": "<one sentence, plain>",
        "evidence": "<2-4 sentence synopsis of what the source says, so the user
                      can decide here without opening the link>",
        "citation": {{"title": "<source title>", "url": "<real url>"}}}}
@@ -117,6 +127,8 @@ class SignalIn(BaseModel):
     itemid: int | None = None   # None for research-only labs not in the dataset
     name: str = ""
     direction: str
+    # the value this rule fires at; None means "outside the reference range"
+    threshold: float | None = None
     rationale: str = ""
     evidence: str = ""
     citation: dict = {}
@@ -295,6 +307,7 @@ def _extract_proposals(text: str) -> tuple[str, list[dict]]:
                 "name": name,
                 "direction": direction,
                 "in_dataset": in_dataset,
+                "threshold": _clean_threshold(p.get("threshold")),
                 "rationale": (p.get("rationale") or "").strip(),
                 "evidence": (p.get("evidence") or "").strip(),
                 "citation": {
