@@ -7,7 +7,9 @@ trending toward "worsening", "improving", or "stable" for that lab.
 We use two simple, transparent signals:
   1. monotonic run  -> the last `window` values all move in the same direction
   2. linear slope   -> sign of the least-squares slope over the last `window` values
-The lab dictionary's `worsening` field defines which direction is clinically bad.
+The lab dictionary's `worsening` field defines which direction is clinically bad
+by default -- but a caller may override it (see `trend`), because that field is
+one fixed opinion per lab and a user-built pattern can legitimately disagree.
 """
 from src.ingestion.lab_dictionary import LAB_DEFS
 
@@ -27,8 +29,16 @@ def _slope(values: list[float]) -> float:
     return num / den if den else 0.0
 
 
-def trend(itemid: int, values: list[float], window: int = 3) -> str:
-    """Classify the recent trend of a single lab's value series (oldest->newest)."""
+def trend(itemid: int, values: list[float], window: int = 3,
+          worsening: str | None = None) -> str:
+    """Classify the recent trend of a single lab's value series (oldest->newest).
+
+    `worsening` overrides which direction counts as clinically bad ("high" |
+    "low" | "both"). The lab dictionary carries a single opinion per lab, which
+    is right for the built-in score but wrong for a pattern that deliberately
+    watches the other direction: a rule for "White Blood Cells LOW" is looking
+    for leukopenia, and a falling white count must not read as "improving".
+    """
     if len(values) < window:
         return STABLE
     recent = values[-window:]
@@ -37,7 +47,7 @@ def trend(itemid: int, values: list[float], window: int = 3) -> str:
         return STABLE
 
     rising = s > 0
-    direction = LAB_DEFS[itemid].worsening  # "high" | "low" | "both"
+    direction = worsening or LAB_DEFS[itemid].worsening  # "high" | "low" | "both"
     if direction == "high":
         return WORSENING if rising else IMPROVING
     if direction == "low":

@@ -122,7 +122,7 @@ The system follows a **pipeline architecture**: data flows from ingestion throug
 5. **Lead-Time Analysis** — quantifies how many hours *ahead* the trend signal fires versus MIMIC's own abnormal `FLAG` — the scientific core of the project ([`lead_time.py`](deterioration-detector/src/analysis/lead_time.py)).
 6. **Detector Evaluation** — scores our anomaly detector against MIMIC's `FLAG` column as ground truth ([`evaluation.py`](deterioration-detector/src/analysis/evaluation.py)).
 7. **Scoring Rule Book** — a transparent, source-cited summary of how every score is decided, assembled *live* from the scoring engine's own constants so it can never drift from the code ([`rules.py`](deterioration-detector/src/analysis/rules.py)).
-8. **Pattern Builder** — lets a researcher name a candidate syndrome and agree, with an AI co-worker that searches live literature, on a set of **cited** lab rules; the rule set can be tried against the whole cohort and, once saved, is evaluated on every patient alongside the built-in syndromes ([`custom_syndromes.py`](deterioration-detector/src/analysis/custom_syndromes.py), [`builder.py`](deterioration-detector/src/api/builder.py)).
+8. **Pattern Builder** — lets a researcher name a candidate syndrome and agree, with an AI co-worker that searches live literature, on a set of **cited** lab rules. A saved pattern is evaluated on every patient alongside the built-in syndromes, and can **replace the hardcoded risk score** so the whole dashboard ranks and scores by that syndrome instead ([`custom_syndromes.py`](deterioration-detector/src/analysis/custom_syndromes.py), [`builder.py`](deterioration-detector/src/api/builder.py), [`pattern_risk.py`](deterioration-detector/src/storage/pattern_risk.py)).
 9. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
 
 ---
@@ -240,13 +240,14 @@ docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
 | `GET /api/evaluation` | Detector-vs-MIMIC-`FLAG` accuracy, overall and per-lab. |
 | `GET /api/lead-time` | How many hours ahead the trend signal fires before the first abnormal flag. |
 | `GET /api/rules` | The cited scoring rule book: reference ranges, classification bands, point math, risk categories, and syndrome definitions, each tagged with a published source. |
-| `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). |
-| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes — built-in **and** any saved Pattern Builder pattern that matches. |
+| `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). `?pattern=<key>` ranks by a user-built pattern instead of the built-in score. |
+| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes — built-in **and** any saved Pattern Builder pattern that matches. `?pattern=<key>` scores the whole response by that pattern. |
 | `GET /api/builder/labs` · `/catalog` | The 8 testable labs, and the full ~700-lab catalog behind the pick-list. |
 | `GET·POST /api/builder/syndromes` · `DELETE /{key}` | List, save and delete user-built patterns. |
 | `GET /api/builder/export` · `POST /api/builder/import` | Download every saved pattern as JSON, and restore one. |
 | `POST /api/builder/research` | One AI co-research turn: live web search → prose reply plus cited rule proposals. |
 | `POST /api/builder/run` | Apply a rule set across the whole cohort and report which admissions match. |
+| `POST /api/builder/syndromes/{key}/rank` | Rebuild the cached cohort ranking for one pattern (also runs automatically on save). |
 
 ---
 
@@ -293,10 +294,24 @@ The other tabs show patterns *we* defined. The **Pattern Builder** tab lets you 
 2. **Co-research it with the AI** — the co-pilot searches real literature through OpenAI's hosted `web_search` tool and proposes rules, each one lab moving in one direction, with a plain rationale and a citation. It summarises what each source *says* directly in the chat, so you can judge a proposal without opening the link. A search takes up to a minute and can be cancelled or retried.
 3. **Review the rule set** — add rules by hand from a searchable catalog of ~700 labs, edit any rule's direction, rationale, evidence or citation, set how many rules must fire, then **run it across all 8,304 admissions**. Click any result to jump straight to that patient.
 
-Two things make a saved pattern real rather than a toy:
+Three things make a saved pattern real rather than a toy:
 
 - **It is applied to every patient.** A saved pattern is evaluated on each admission alongside the built-in syndromes and appears on the Patient Monitoring page as a card marked **Custom**, carrying its citations.
+- **It can drive the scoring.** See below — this is the point of the tab.
 - **It is honest about what it tested.** Only the 8 tracked labs exist in this dataset. A rule over any other lab is kept as *research-only*: saved, cited and displayed, but never counted as a match — the pattern card and the cohort run both say so explicitly.
+
+#### Scoring by a pattern
+
+The dashboard shipped with exactly one scoring model: [`score_admission()`](deterioration-detector/src/analysis/risk_score.py), which counts all 8 labs equally and answers *"how much of this patient's blood work looks wrong?"*. The **Score by** selector in the sidebar swaps in any pattern you've built, so the same dashboard answers a different question — *"how much does this patient look like this syndrome?"*.
+
+Choosing a pattern recomputes the risk score, the Low/Medium/High badge, the alerts, the risk trajectory **and the triage board's ranking** from that pattern's rules. Select "all 8 labs (built-in)" to switch back; the affected pages say which model produced the number so the two are never confused.
+
+The point maths is deliberately unchanged — the same 0/1/2 severity plus a worsening bonus, so the [Scoring Rule Book](#-scoring-rule-book) stays truthful. Only two things differ, both necessarily:
+
+1. **A lab moving the way the pattern doesn't care about scores nothing.** A rule for *White Blood Cells ↓ Low* is hunting leukopenia, so a *high* white count is not evidence for it. This also fixes a latent bug: `trend()` used to take its "which direction is bad" opinion solely from the lab dictionary, so a collapsing white count read as *improving* even for a rule that was looking for exactly that. A pattern's own direction now wins.
+2. **Low/Medium/High scale to the pattern's ceiling.** Each rule can contribute at most 3 points, so a 2-rule pattern maxes out at 6 and could never reach the built-in score's `6+ = High` band. High is the top third of what *that* pattern can produce.
+
+Because the trend bonus needs each lab's recent series rather than just its latest value, ranking the whole cohort by a pattern is precomputed and cached — automatically in the background whenever a pattern is saved, or on demand via `POST /api/builder/syndromes/{key}/rank`.
 
 Patterns are stored in the cloud database when `MOTHERDUCK_TOKEN` is set (so they survive a redeploy) and in a local JSON file otherwise; the tab tells you which. **Export** / **Import** move them between the two as a JSON file.
 

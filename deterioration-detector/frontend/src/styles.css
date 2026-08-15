@@ -1017,3 +1017,13 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .syncites .material-symbols-outlined { font-size: 15px; flex-shrink: 0; }
 .syncites a { color: var(--primary); text-decoration: none; }
 .syncites a:hover { text-decoration: underline; }
+
+/* ── Pattern-driven scoring: which rules produced the number on screen ── */
+.scoredby { display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px;
+  font-size: 12.5px; line-height: 1.5; color: var(--on-surface-variant);
+  background: var(--surface-low); border: 1px solid var(--primary-container);
+  border-left: 3px solid var(--primary); border-radius: var(--radius); }
+.scoredby b { color: var(--on-surface); }
+.scoredby .material-symbols-outlined { font-size: 17px; color: var(--primary); flex-shrink: 0; margin-top: 1px; }
+/* the selector reads as "on" whenever it isn't the built-in score */
+.sort.patternon { border-color: var(--primary); color: var(--primary); }

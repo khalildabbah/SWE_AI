@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.storage.db import connect, admission_series
-from src.analysis.risk_score import LabState, score_admission
+from src.storage import pattern_risk
+from src.analysis.risk_score import LabState, score_admission, score_pattern
+from src.analysis.custom_syndromes import get_custom
 from src.analysis.alerts import build_alerts
 from src.analysis.trajectory import compute_trajectory
 from src.analysis.syndromes import detect_syndromes
@@ -152,38 +154,92 @@ def lead_time():
     }
 
 
+def _active_pattern(key: str | None) -> dict | None:
+    """Resolve ?pattern=<key> to a saved pattern, or None for the built-in score.
+
+    An unknown or untestable key falls back to the built-in score rather than
+    erroring — a stale bookmark should not break the dashboard.
+    """
+    if not key:
+        return None
+    pattern = get_custom(key)
+    if not pattern:
+        return None
+    runnable = [s for s in (pattern.get("signals") or [])
+                if s.get("in_dataset") and s.get("itemid") is not None]
+    return pattern if runnable else None
+
+
 @app.get("/api/admissions")
 def admissions(
     category: str | None = Query(None, pattern="^(Low|Medium|High)$"),
     sort: str = Query("score", pattern="^(score|measurements)$"),
     limit: int = Query(50, le=500),
     offset: int = 0,
+    pattern: str | None = None,
 ):
-    """Triage board: admissions ranked by risk (precomputed)."""
+    """Triage board: admissions ranked by risk (precomputed).
+
+    With `pattern` set, ranks by that user-built pattern's score instead of the
+    built-in one, reading the per-pattern ranking cached by `pattern_risk`.
+    """
+    active = _active_pattern(pattern)
     con = connect()
-    where = "WHERE r.category = ?" if category else ""
-    params = [category] if category else []
-    order = "r.score DESC" if sort == "score" else "a.n_measurements DESC"
-    rows = con.execute(f"""
-        SELECT r.subject_id, r.hadm_id, r.score, r.category,
-               r.n_high, r.n_worsening, a.n_measurements, a.span_hours
-        FROM risk_summary r
-        JOIN admissions a USING (subject_id, hadm_id)
-        {where}
-        ORDER BY {order}
-        LIMIT ? OFFSET ?
-    """, params + [limit, offset]).fetchall()
-    total = con.execute(
-        f"SELECT COUNT(*) FROM risk_summary r {where}", params).fetchone()[0]
-    con.close()
+    try:
+        if active:
+            pattern_risk.ensure_built(active)
+            table = pattern_risk.attach(con)
+            if table:
+                where = "WHERE r.pattern_key = ?" + (" AND r.category = ?" if category else "")
+                params = [active["key"]] + ([category] if category else [])
+                order = "r.score DESC" if sort == "score" else "a.n_measurements DESC"
+                rows = con.execute(f"""
+                    SELECT r.subject_id, r.hadm_id, r.score, r.category,
+                           r.n_high, r.n_worsening, a.n_measurements, a.span_hours
+                    FROM {table} r
+                    JOIN admissions a USING (subject_id, hadm_id)
+                    {where}
+                    ORDER BY {order}
+                    LIMIT ? OFFSET ?
+                """, params + [limit, offset]).fetchall()
+                total = con.execute(
+                    f"SELECT COUNT(*) FROM {table} r {where}", params).fetchone()[0]
+                cols = ["subject_id", "hadm_id", "score", "category",
+                        "n_high", "n_worsening", "n_measurements", "span_hours"]
+                return {"total": total, "pattern": active["key"],
+                        "pattern_name": active["name"],
+                        "items": [dict(zip(cols, r)) for r in rows]}
+
+        where = "WHERE r.category = ?" if category else ""
+        params = [category] if category else []
+        order = "r.score DESC" if sort == "score" else "a.n_measurements DESC"
+        rows = con.execute(f"""
+            SELECT r.subject_id, r.hadm_id, r.score, r.category,
+                   r.n_high, r.n_worsening, a.n_measurements, a.span_hours
+            FROM risk_summary r
+            JOIN admissions a USING (subject_id, hadm_id)
+            {where}
+            ORDER BY {order}
+            LIMIT ? OFFSET ?
+        """, params + [limit, offset]).fetchall()
+        total = con.execute(
+            f"SELECT COUNT(*) FROM risk_summary r {where}", params).fetchone()[0]
+    finally:
+        con.close()
     cols = ["subject_id", "hadm_id", "score", "category",
             "n_high", "n_worsening", "n_measurements", "span_hours"]
-    return {"total": total, "items": [dict(zip(cols, r)) for r in rows]}
+    return {"total": total, "pattern": None,
+            "items": [dict(zip(cols, r)) for r in rows]}
 
 
 @app.get("/api/admissions/{subject_id}/{hadm_id}")
-def admission_detail(subject_id: int, hadm_id: int):
-    """Full detail for one admission: lab timelines, risk, trajectory, alerts."""
+def admission_detail(subject_id: int, hadm_id: int, pattern: str | None = None):
+    """Full detail for one admission: lab timelines, risk, trajectory, alerts.
+
+    With `pattern` set, the risk score, category, alerts and trajectory are all
+    computed from that user-built pattern instead of the built-in 8-lab score.
+    """
+    active = _active_pattern(pattern)
     con = connect()
     series = admission_series(con, subject_id, hadm_id)
     con.close()
@@ -208,20 +264,26 @@ def admission_detail(subject_id: int, hadm_id: int):
             "points": [{"time": t.isoformat(), "value": v} for (t, v) in info["points"]],
         })
 
-    risk = score_admission(states)
+    signals = [s for s in (active.get("signals") or [])
+               if s.get("in_dataset") and s.get("itemid") is not None] if active else []
+    risk = score_pattern(states, signals) if active else score_admission(states)
     lt = compute_lead_time(series)
     return {
         "subject_id": subject_id,
         "hadm_id": hadm_id,
         "risk": {"score": risk.score, "category": risk.category,
-                 "contributions": risk.contributions},
+                 "contributions": risk.contributions,
+                 # what produced this score, so the UI never mislabels it
+                 "pattern": active["key"] if active else None,
+                 "pattern_name": active["name"] if active else None,
+                 "max_score": 3 * len(signals) if active else None},
         "alerts": build_alerts(risk),
         # Built-in syndromes and the user's own Pattern Builder patterns share a
         # card on the dashboard, so they share a list and an ordering.
         "syndromes": sorted(
             detect_syndromes(states) + detect_custom(states),
             key=lambda r: (r["confidence"], r["severity"] == "critical"), reverse=True),
-        "trajectory": compute_trajectory(series),
+        "trajectory": compute_trajectory(series, signals or None),
         "lead_time": {
             "deteriorated": lt.deteriorated, "concerned": lt.concerned,
             "alerted": lt.alerted,
