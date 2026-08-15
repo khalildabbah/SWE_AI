@@ -6,14 +6,16 @@ trajectory, and alerts to the React dashboard.
 
 Run:  uvicorn src.api.main:app --reload  (from the project root)
 """
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from src.storage.db import connect, admission_series
-from src.storage import pattern_risk
+from src.storage import pattern_risk, mutations
 from src.analysis.risk_score import LabState, score_admission, score_pattern
 from src.analysis.custom_syndromes import get_custom
 from src.analysis.alerts import build_alerts
@@ -302,6 +304,59 @@ def admission_detail(subject_id: int, hadm_id: int, pattern: str | None = None):
         },
         "labs": lab_series,
     }
+
+
+class MeasurementIn(BaseModel):
+    """One hand-entered lab reading."""
+    itemid: int
+    charttime: datetime
+    value: float
+
+
+class AdmissionIn(BaseModel):
+    """A new admission: the patient it belongs to plus its lab readings.
+
+    Everything the dashboard shows is derived from the readings, so there is no
+    other patient information to collect — a name or age would be recorded and
+    never used, and this dataset is de-identified by design.
+    """
+    subject_id: int = Field(gt=0, description="Patient ID")
+    hadm_id: int = Field(gt=0, description="Admission ID")
+    measurements: list[MeasurementIn] = Field(min_length=1)
+
+
+@app.get("/api/labs")
+def labs_catalog():
+    """The labs an admission can be entered against, with the ranges and bounds
+    the form needs to validate a value before it is submitted."""
+    return {"items": [
+        {"itemid": d.itemid, "name": d.name, "unit": d.unit,
+         "normal_low": d.low, "normal_high": d.high,
+         "plausible_min": d.plausible_min, "plausible_max": d.plausible_max}
+        for d in sorted(LAB_DEFS.values(), key=lambda x: x.name)
+    ]}
+
+
+@app.post("/api/admissions", status_code=201)
+def create_admission(payload: AdmissionIn):
+    """Add a hand-entered admission, scored by the same engine as every other."""
+    try:
+        result = mutations.create_admission(
+            payload.subject_id, payload.hadm_id,
+            [m.model_dump() for m in payload.measurements],
+        )
+    except mutations.ValidationError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@app.delete("/api/admissions/{subject_id}/{hadm_id}")
+def delete_admission(subject_id: int, hadm_id: int):
+    """Permanently delete an admission and everything derived from it."""
+    result = mutations.delete_admission(subject_id, hadm_id)
+    if not result:
+        raise HTTPException(404, "Admission not found")
+    return result
 
 
 # Serve the built React dashboard from the same origin as the API.

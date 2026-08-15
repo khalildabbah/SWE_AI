@@ -5,15 +5,9 @@ import {
 } from "recharts";
 import Chatbot from "./Chatbot.jsx";
 import Builder from "./Builder.jsx";
+import PatientActions from "./PatientAdmin.jsx";
+import { ThemeContext, DEFAULT_THEME, useChartTheme } from "./theme.js";
 
-// Clinical palette (mirrors styles.css tokens) for chart strokes/fills.
-const RISK_COLOR = { Low: "#10b981", Medium: "#f59e0b", High: "#ef4444" };
-// Per-lab abnormality status → colour + label (matches src/analysis/abnormal.py).
-const STATUS = {
-  normal: { color: "#10b981", label: "Normal" },
-  abnormal: { color: "#f59e0b", label: "Abnormal" },
-  critical: { color: "#ef4444", label: "Critical" },
-};
 const TREND = {
   worsening: { icon: "trending_up", arrow: "↑", label: "Worsening", cls: "worsening" },
   improving: { icon: "trending_down", arrow: "↓", label: "Improving", cls: "improving" },
@@ -89,6 +83,42 @@ const TIPS = {
   rb_source: "The published source this rule is based on. Click to open it; hover for the full citation.",
 };
 
+// The one place a page is described. Drives both the nav rail and the topbar,
+// so a renamed page can't end up with two different names on screen.
+const PAGES = [
+  { key: "dashboard", icon: "dashboard", label: "Dashboard",
+    title: "Deterioration Watch",
+    subtitle: "Risk score, trajectory and lab trends for the selected admission" },
+  { key: "monitoring", icon: "monitor_heart", label: "Patient Monitoring",
+    title: "Patient Monitoring",
+    subtitle: "Clinical syndromes and live lab vitals for the selected admission" },
+  { key: "leadtime", icon: "schedule", label: "Early Warning",
+    title: "Early Warning",
+    subtitle: "How far ahead the score escalates before the first critical value" },
+  { key: "evaluation", icon: "fact_check", label: "Detector Accuracy",
+    title: "Detector Accuracy",
+    subtitle: "Our reference-range detector measured against MIMIC's own abnormal flag" },
+  { key: "rules", icon: "menu_book", label: "Scoring Rule Book",
+    title: "Scoring Rule Book",
+    subtitle: "Every rule behind the score, with the published source it came from" },
+  { key: "builder", icon: "construction", label: "Pattern Builder", accent: true,
+    title: "Pattern Builder",
+    subtitle: "Build a scoring pattern from cited evidence, then run it across the cohort" },
+];
+
+const THEME_KEY = "cc-theme";
+
+/* Resolve the theme to start in: an explicit past choice wins, otherwise follow
+ * the OS preference. Guarded so the module still renders outside a browser. */
+function initialTheme() {
+  if (typeof window === "undefined") return DEFAULT_THEME;
+  try {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch { /* private mode / storage disabled — fall through to the OS hint */ }
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : DEFAULT_THEME;
+}
+
 // A small reusable hover tooltip with a dotted underline cue.
 function Tip({ text, children }) {
   return (
@@ -100,6 +130,7 @@ function Tip({ text, children }) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(initialTheme); // "dark" | "light"
   const [page, setPage] = useState("dashboard"); // "dashboard" | "monitoring"
   const [stats, setStats] = useState(null);
   const [filter, setFilter] = useState("High");
@@ -114,10 +145,23 @@ export default function App() {
   // Which pattern drives scoring. "" = the built-in 8-lab risk score.
   const [scoringPattern, setScoringPattern] = useState("");
   const [patterns, setPatterns] = useState([]);
+  // Bumped after an add/delete to re-run the board and footer queries.
+  const [dataVersion, setDataVersion] = useState(0);
+  // The admission just added, as a board row. The board only fetches the top
+  // 100 by score, so a new patient usually lands well past the end of the list
+  // — it is pinned to the top and kept selected until another is chosen, or it
+  // would vanish the instant the board reloaded.
+  const [justAdded, setJustAdded] = useState(null);
+
+  // The attribute on <html> is what styles.css keys the light token block off.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { window.localStorage.setItem(THEME_KEY, theme); } catch { /* not fatal */ }
+  }, [theme]);
 
   useEffect(() => {
     fetch("/api/stats").then((r) => r.json()).then(setStats).catch(() => {});
-  }, []);
+  }, [dataVersion]);
 
   // Saved patterns that can actually score — one needs at least one rule over a
   // lab this dataset carries, or there is nothing to rank patients by.
@@ -147,25 +191,39 @@ export default function App() {
       .then((d) => setBoard(d.items))
       .catch(() => { setBoard([]); setBoardError(true); })
       .finally(() => setBoardLoading(false));
-  }, [filter, sort, scoringPattern]);
+  }, [filter, sort, scoringPattern, dataVersion]);
 
   // Client-side search over the loaded cohort (by patient or admission ID).
   const visible = useMemo(() => {
     const q = query.trim();
-    if (!q) return board;
-    return board.filter((a) =>
-      String(a.subject_id).includes(q) || String(a.hadm_id).includes(q));
-  }, [board, query]);
+    const match = (a) => !q
+      || String(a.subject_id).includes(q) || String(a.hadm_id).includes(q);
+    const rows = board.filter(match);
+    // Surface a just-added admission even though its score puts it past the
+    // page limit — but only where it belongs: not under a category filter it
+    // doesn't match, and not under a search it doesn't match.
+    if (justAdded
+      && (!filter || filter === justAdded.category)
+      && match(justAdded)
+      && !rows.some((a) => a.subject_id === justAdded.subject_id
+        && a.hadm_id === justAdded.hadm_id)) {
+      return [justAdded, ...rows];
+    }
+    return rows;
+  }, [board, query, justAdded, filter]);
 
   // Auto-select the top visible patient so the detail pane is never empty.
   // Keep the current selection if it's still in the visible list.
   useEffect(() => {
     if (!visible.length) return;
-    setSelected((cur) =>
-      cur && visible.some((a) => a.subject_id === cur.subject_id && a.hadm_id === cur.hadm_id)
-        ? cur : visible[0]
-    );
-  }, [visible]);
+    setSelected((cur) => {
+      if (!cur) return visible[0];
+      if (justAdded && cur.subject_id === justAdded.subject_id
+        && cur.hadm_id === justAdded.hadm_id) return cur;
+      return visible.some((a) => a.subject_id === cur.subject_id && a.hadm_id === cur.hadm_id)
+        ? cur : visible[0];
+    });
+  }, [visible, justAdded]);
 
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
@@ -190,6 +248,7 @@ export default function App() {
       const next = e.key === "ArrowDown"
         ? Math.min(visible.length - 1, i + 1)
         : Math.max(0, i - 1);
+      setPinned(null);
       setSelected(visible[next]);
     };
     window.addEventListener("keydown", onKey);
@@ -197,8 +256,29 @@ export default function App() {
   }, [visible, selected]);
 
   const FILTERS = [["High", "High"], ["Medium", "Med"], ["Low", "Low"], ["", "All"]];
+  const current = PAGES.find((p) => p.key === page) || PAGES[0];
+
+  // Picking a patient by hand releases the pin from a just-added admission.
+  const choose = (a) => { setJustAdded(null); setSelected(a); };
+
+  // The create response carries every field a board row needs, so the new
+  // patient can be listed and selected without waiting for a refetch.
+  const handleCreated = (res) => {
+    setJustAdded(res);
+    setSelected({ subject_id: res.subject_id, hadm_id: res.hadm_id });
+    setQuery("");
+    setDataVersion((v) => v + 1);
+  };
+
+  const handleDeleted = () => {
+    setJustAdded(null);
+    setSelected(null);   // the board reload picks the next patient
+    setDetail(null);
+    setDataVersion((v) => v + 1);
+  };
 
   return (
+    <ThemeContext.Provider value={theme}>
     <div className="app">
       {/* ── Side navigation rail + patient explorer ── */}
       <aside className="rail">
@@ -211,21 +291,18 @@ export default function App() {
         </div>
 
         <nav className="nav">
-          <a className={page === "dashboard" ? "active" : ""} onClick={() => setPage("dashboard")}>
-            <Icon name="dashboard" /><span>Dashboard</span></a>
-          <a className={page === "monitoring" ? "active" : ""} onClick={() => setPage("monitoring")}>
-            <Icon name="monitor_heart" /><span>Patient Monitoring</span></a>
-          <a className={page === "leadtime" ? "active" : ""} onClick={() => setPage("leadtime")}>
-            <Icon name="schedule" /><span>Early Warning</span></a>
-          <a className={page === "evaluation" ? "active" : ""} onClick={() => setPage("evaluation")}>
-            <Icon name="fact_check" /><span>Detector Accuracy</span></a>
-          <a className={page === "rules" ? "active" : ""} onClick={() => setPage("rules")}>
-            <Icon name="menu_book" /><span>Scoring Rule Book</span></a>
-          <a className={`navbuilder ${page === "builder" ? "active" : ""}`} onClick={() => setPage("builder")}>
-            <Icon name="construction" /><span>Pattern Builder</span></a>
+          {PAGES.map((p) => (
+            <a key={p.key}
+              className={`${p.accent ? "navbuilder " : ""}${page === p.key ? "active" : ""}`.trim()}
+              aria-current={page === p.key ? "page" : undefined}
+              onClick={() => setPage(p.key)}>
+              <Icon name={p.icon} /><span>{p.label}</span>
+            </a>
+          ))}
         </nav>
 
         <div className="explorer">
+          <div className="raillabel">Cohort</div>
           <div className="searchwrap">
             <Icon name="search" />
             <input className="search" type="search" value={query}
@@ -270,13 +347,16 @@ export default function App() {
             )}
             {visible.map((a) => {
               const sel = selected && selected.subject_id === a.subject_id && selected.hadm_id === a.hadm_id;
+              const isNew = justAdded && justAdded.subject_id === a.subject_id
+                && justAdded.hadm_id === a.hadm_id;
               return (
                 <div key={`${a.subject_id}-${a.hadm_id}`}
-                  className={`prow ${sel ? "sel" : ""}`} onClick={() => setSelected(a)}>
+                  className={`prow ${sel ? "sel" : ""} ${isNew ? "new" : ""}`} onClick={() => choose(a)}>
                   <div className="top">
                     <span className={`pid ${a.n_high > 0 ? "crit" : ""}`}>
                       {a.n_high > 0 && <Icon name="warning" />}
                       Patient {a.subject_id}
+                      {isNew && <span className="newbadge">New</span>}
                     </span>
                     <span className={`chip ${a.category}`} title={TIPS.badge}>
                       {a.category} · <span className="pts">{a.score}</span>
@@ -306,17 +386,19 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <div className="lead">
-            <span className="title">
-              {page === "monitoring" ? "Patient Monitoring"
-                : page === "evaluation" ? "Detector Accuracy"
-                : page === "leadtime" ? "Early Warning"
-                : page === "rules" ? "Scoring Rule Book"
-                : page === "builder" ? "Pattern Builder"
-                : "Deterioration Watch"}
-            </span>
+            <div>
+              <div className="title">{current.title}</div>
+              <div className="subtitle">{current.subtitle}</div>
+            </div>
           </div>
           <div className="actions">
             <div className="live"><span className="dot" />System Live</div>
+            <button className="themetoggle" type="button"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              <Icon name={theme === "dark" ? "light_mode" : "dark_mode"} />
+            </button>
             <Icon name="notifications" />
             <Icon name="apps" />
             <div className="avatar"><Icon name="person" /></div>
@@ -343,7 +425,8 @@ export default function App() {
               {!detail && !detailError && <div className="placeholder">Loading patient…</div>}
               {detail && (page === "monitoring"
                 ? <Monitoring d={detail} meta={selected} />
-                : <Detail d={detail} meta={selected} />)}
+                : <Detail d={detail} meta={selected}
+                    onCreated={handleCreated} onDeleted={handleDeleted} />)}
             </>
           )}
         </div>
@@ -357,6 +440,7 @@ export default function App() {
       {/* Floating dataset assistant (bottom-right) */}
       <Chatbot />
     </div>
+    </ThemeContext.Provider>
   );
 }
 
@@ -372,7 +456,8 @@ function DataBar({ stats }) {
   );
 }
 
-function Detail({ d, meta }) {
+function Detail({ d, meta, onCreated, onDeleted }) {
+  const { COLOR, RISK_COLOR, GRID_PROPS, AXIS_PROPS, axisTick, tooltipProps } = useChartTheme();
   const cat = d.risk.category;
   // Trajectory defaults to connected (step line) for at-a-glance trend
   // reading; a toggle lets clinicians switch to disconnected points, since
@@ -419,6 +504,11 @@ function Detail({ d, meta }) {
 
   return (
     <>
+      <div className="pageactions">
+        <PatientActions d={d} meta={meta} onCreated={onCreated} onDeleted={onDeleted} />
+        <ExportReport d={d} meta={meta} />
+      </div>
+
       <ScoredBy risk={d.risk} />
 
       {/* Bento header: score card + metric cluster */}
@@ -491,37 +581,37 @@ function Detail({ d, meta }) {
         </div>
         <div className="leadcallout"><Icon name="schedule" /><Tip text={TIPS.lead_time}>{leadMsg}</Tip></div>
         <ResponsiveContainer width="100%" height={300}>
-          <AreaChart data={traj} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <AreaChart data={traj} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={stroke} stopOpacity={0.45} />
-                <stop offset="100%" stopColor={stroke} stopOpacity={0.02} />
+                <stop offset="0%" stopColor={stroke} stopOpacity={0.32} />
+                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid stroke="#424754" strokeDasharray="4 4" vertical={false} />
+            <CartesianGrid {...GRID_PROPS} />
             {/* type="number" spaces points by real elapsed time rather than by
                 measurement index, so gaps between labs read as gaps. Explicit
                 `ticks` sidesteps recharts' broken auto tick generation on this domain. */}
             <XAxis dataKey="ts" type="number" domain={[tsMin, tsMax]} ticks={trajTicks}
               tickFormatter={(ts) => fmtTime(new Date(ts).toISOString())}
-              tick={{ fontSize: 10, fill: "#8c909f", fontFamily: "Geist Mono" }} />
-            <YAxis tick={{ fontSize: 11, fill: "#8c909f", fontFamily: "Geist Mono" }} width={36} />
-            <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6 }}
-              labelStyle={{ color: "#c2c6d6" }} labelFormatter={(ts) => fmtTime(new Date(ts).toISOString())} />
+              tick={axisTick(10)} tickMargin={10} {...AXIS_PROPS} />
+            <YAxis tick={axisTick(11)} tickMargin={6} width={40} {...AXIS_PROPS} />
+            <Tooltip {...tooltipProps()} labelFormatter={(ts) => fmtTime(new Date(ts).toISOString())} />
             {/* stepAfter: a lab value holds constant until the next reading rather
                 than smoothly drifting toward it — matches how the data is actually sampled.
                 In "Points" mode (default) the stroke/fill are hidden entirely so only the
                 per-measurement square markers show — no implied connection between readings. */}
             <Area type="stepAfter" dataKey="score" isAnimationActive={false}
-              stroke={trajConnected ? stroke : "none"} fill={trajConnected ? "url(#g)" : "none"} strokeWidth={3}
-              dot={trajConnected ? false : <SquareDot fill={stroke} />} activeDot={{ r: 5 }} />
+              stroke={trajConnected ? stroke : "none"} fill={trajConnected ? "url(#g)" : "none"} strokeWidth={2}
+              dot={trajConnected ? false : <SquareDot fill={stroke} />}
+              activeDot={{ r: 4, fill: stroke, stroke: COLOR.surfaceLowest, strokeWidth: 2 }} />
             {concernTs && (
-              <ReferenceLine x={concernTs} stroke="#f59e0b" strokeDasharray="3 3"
-                label={{ value: "concern", position: "insideTopLeft", fill: "#f59e0b", fontSize: 10 }} />
+              <ReferenceLine x={concernTs} stroke={COLOR.warning} strokeDasharray="3 3"
+                label={{ value: "concern", position: "insideTopLeft", fill: COLOR.warning, fontSize: 10 }} />
             )}
             {eventTs && eventTs !== concernTs && (
-              <ReferenceLine x={eventTs} stroke="#ef4444" strokeDasharray="3 3"
-                label={{ value: "critical", position: "insideTopRight", fill: "#ef4444", fontSize: 10 }} />
+              <ReferenceLine x={eventTs} stroke={COLOR.critical} strokeDasharray="3 3"
+                label={{ value: "critical", position: "insideTopRight", fill: COLOR.critical, fontSize: 10 }} />
             )}
           </AreaChart>
         </ResponsiveContainer>
@@ -561,6 +651,45 @@ function Detail({ d, meta }) {
           {d.labs.map((lab) => <LabCard key={lab.itemid} lab={lab} info={byId[lab.itemid]} />)}
         </div>
       </section>
+    </>
+  );
+}
+
+/* Exports the admission currently on screen as a PDF.
+ *
+ * jsPDF is ~400 kB, and most sessions never export, so the generator is pulled
+ * in on first click rather than bundled into the initial dashboard load. */
+function ExportReport({ d, meta }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const onClick = async () => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      const { downloadPatientReport } = await import("./report.js");
+      await downloadPatientReport({ d, meta });
+    } catch (e) {
+      console.error("Report export failed", e);
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      {failed && (
+        <span className="exporterr" role="alert">
+          <Icon name="error" />Couldn't generate the report — please try again.
+        </span>
+      )}
+      <button className="exportbtn" type="button" onClick={onClick} disabled={busy}
+        title={`Download a PDF report for patient ${d.subject_id}, admission ${d.hadm_id}`}>
+        <Icon name={busy ? "progress_activity" : "picture_as_pdf"} className={busy ? "spin" : ""} />
+        {busy ? "Preparing report…" : "Export Patient Report"}
+      </button>
     </>
   );
 }
@@ -1141,6 +1270,7 @@ function RuleBook() {
 }
 
 function FactorTable({ contributions }) {
+  const { STATUS } = useChartTheme();
   const drivers = contributions.filter((c) => c.points > 0);
   if (drivers.length === 0) {
     return (
@@ -1193,6 +1323,7 @@ function FactorTable({ contributions }) {
 }
 
 function LabCard({ lab, info }) {
+  const { COLOR, STATUS, NORMAL_BAND, AXIS_PROPS, axisTick, tooltipProps } = useChartTheme();
   const data = lab.points.map((p) => ({ label: fmtTime(p.time), value: p.value }));
   const def = GLOSSARY[lab.test_name];
   const status = info?.status || "normal";
@@ -1209,13 +1340,12 @@ function LabCard({ lab, info }) {
       <div className="labbody">
         <ResponsiveContainer width="100%" height={128}>
           <LineChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
-            <ReferenceArea y1={lab.normal_low} y2={lab.normal_high} fill="#10b981" fillOpacity={0.1} />
+            <ReferenceArea y1={lab.normal_low} y2={lab.normal_high} {...NORMAL_BAND} />
             <XAxis dataKey="label" hide />
-            <YAxis tick={{ fontSize: 9, fill: "#8c909f", fontFamily: "Geist Mono" }} width={30} domain={["auto", "auto"]} />
-            <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6, fontSize: 12 }}
-              labelStyle={{ color: "#c2c6d6" }} />
-            <Line type="monotone" dataKey="value" stroke={st.color} strokeWidth={1.6}
-              dot={false} activeDot={{ r: 4 }} />
+            <YAxis tick={axisTick(9)} tickMargin={4} width={32} domain={["auto", "auto"]} {...AXIS_PROPS} />
+            <Tooltip {...tooltipProps(12)} />
+            <Line type="monotone" dataKey="value" stroke={st.color} strokeWidth={2}
+              dot={false} activeDot={{ r: 4, fill: st.color, stroke: COLOR.surfaceLowest, strokeWidth: 2 }} />
           </LineChart>
         </ResponsiveContainer>
         {latest != null && (

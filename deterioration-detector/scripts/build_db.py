@@ -76,7 +76,11 @@ def main() -> None:
             CAST(r.CHARTTIME AS TIMESTAMP) AS charttime,
             r.VALUENUM::DOUBLE             AS value,
             d.unit                         AS unit,
-            r.FLAG                         AS flag
+            r.FLAG                         AS flag,
+            -- Provenance. Admissions added through the dashboard are marked
+            -- 'user' and excluded from the MIMIC-FLAG evaluation, which only
+            -- means anything for rows that carry MIMIC's own flag.
+            'mimic'                        AS source
         FROM read_csv_auto('{csv_path.as_posix()}', header=true) r
         JOIN lab_def d ON d.itemid = r.ITEMID::INTEGER
         WHERE r.ITEMID IN ({idlist})
@@ -89,7 +93,7 @@ def main() -> None:
     # dedupe identical measurements
     con.execute("""
         CREATE TABLE labs_dedup AS
-        SELECT DISTINCT subject_id, hadm_id, itemid, test_name, charttime, value, unit, flag
+        SELECT DISTINCT subject_id, hadm_id, itemid, test_name, charttime, value, unit, flag, source
         FROM labs_clean
     """)
     con.execute("DROP TABLE labs_clean")

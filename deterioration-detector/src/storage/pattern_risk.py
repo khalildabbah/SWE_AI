@@ -127,6 +127,25 @@ def clear(pattern_key: str) -> None:
         con.close()
 
 
+def forget_admission(subject_id: int, hadm_id: int) -> None:
+    """Drop one admission from every pattern's cached ranking.
+
+    Called when an admission is deleted: the cache is keyed by admission, so
+    without this the board would keep listing a patient that no longer exists
+    for as long as a pattern is the active scoring selection — until something
+    forced a rebuild.
+    """
+    if not pattern_store.use_cloud() and not CACHE_DB.exists():
+        return
+    con = _cache_connect()
+    try:
+        con.execute(DDL)
+        con.execute(f"DELETE FROM {TABLE} WHERE subject_id = ? AND hadm_id = ?",
+                    [subject_id, hadm_id])
+    finally:
+        con.close()
+
+
 def build(pattern: dict) -> int:
     """Score every admission against one pattern and cache the ranking.
 

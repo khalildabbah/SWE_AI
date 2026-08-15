@@ -98,8 +98,14 @@ def build_flag_eval(con) -> None:
     (lab_def low/high, i.e. classify() != normal); actual positive = FLAG marked
     'abnormal'. We aggregate the 2x2 confusion-matrix counts per lab (and the API
     sums them for the overall view). All done in DuckDB -- no row-by-row Python.
+
+    Admissions added through the dashboard are excluded: they carry no MIMIC
+    FLAG, so counting them would silently score the detector against a ground
+    truth that does not exist.
     """
     print("[+] Evaluating detector vs MIMIC FLAG (confusion matrix per lab) ...")
+    # Databases built before provenance tracking have no `source` column.
+    con.execute("ALTER TABLE labs_clean ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'mimic'")
     con.execute("""
         CREATE OR REPLACE TABLE flag_eval AS
         SELECT
@@ -117,6 +123,7 @@ def build_flag_eval(con) -> None:
                 (lower(coalesce(c.flag, '')) = 'abnormal') AS act
             FROM labs_clean c
             JOIN lab_def d ON d.itemid = c.itemid
+            WHERE coalesce(c.source, 'mimic') = 'mimic'
         ) l
         GROUP BY l.itemid, l.test_name
     """)

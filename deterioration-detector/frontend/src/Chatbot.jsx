@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceArea,
 } from "recharts";
+import { useChartTheme } from "./theme.js";
 
 // Floating dataset assistant. Talks to POST /api/chat, which proxies Gemini
 // server-side (the API key never reaches the browser) and answers ONLY questions
@@ -21,18 +22,19 @@ const fmtTime = (iso) => (iso || "").replace("T", " ").slice(0, 16);
 
 // One inline lab chart (mirrors the dashboard's LabCard styling).
 function ChatChart({ chart }) {
+  const { COLOR, AXIS_PROPS, NORMAL_BAND, axisTick, tooltipProps } = useChartTheme();
   const data = (chart.points || []).map((p) => ({ label: fmtTime(p.time), value: p.value }));
   return (
     <div className="cbchart">
       <div className="cbchart-title">{chart.title}</div>
       <ResponsiveContainer width="100%" height={150}>
         <LineChart data={data} margin={{ top: 8, right: 6, left: 0, bottom: 0 }}>
-          <ReferenceArea y1={chart.normal_low} y2={chart.normal_high} fill="#10b981" fillOpacity={0.1} />
+          <ReferenceArea y1={chart.normal_low} y2={chart.normal_high} {...NORMAL_BAND} />
           <XAxis dataKey="label" hide />
-          <YAxis tick={{ fontSize: 9, fill: "#8c909f", fontFamily: "Geist Mono" }} width={30} domain={["auto", "auto"]} />
-          <Tooltip contentStyle={{ background: "#1c2b3c", border: "1px solid #424754", borderRadius: 6, fontSize: 12 }}
-            labelStyle={{ color: "#c2c6d6" }} />
-          <Line type="monotone" dataKey="value" stroke="#adc6ff" strokeWidth={1.6} dot={false} activeDot={{ r: 4 }} />
+          <YAxis tick={axisTick(9)} tickMargin={4} width={32} domain={["auto", "auto"]} {...AXIS_PROPS} />
+          <Tooltip {...tooltipProps(12)} />
+          <Line type="monotone" dataKey="value" stroke={COLOR.primary} strokeWidth={2} dot={false}
+            activeDot={{ r: 4, fill: COLOR.primary, stroke: COLOR.surfaceLowest, strokeWidth: 2 }} />
         </LineChart>
       </ResponsiveContainer>
       <div className="cbchart-foot">
