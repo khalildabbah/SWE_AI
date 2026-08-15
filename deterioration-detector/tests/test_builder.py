@@ -102,6 +102,46 @@ def test_extract_proposals_dedupes_same_lab_and_direction():
     assert proposals[0]["rationale"] == "first"  # first one wins
 
 
+def test_extract_proposals_keeps_a_threshold_from_the_model():
+    """The whole point of thresholds: the cut-off the source states must survive
+    into the rule, instead of the rule quietly firing at the reference range."""
+    text = _block({"proposals": [{
+        "lab": "Creatinine", "itemid": CREATININE, "direction": "high",
+        "threshold": 1.5, "evidence": "HRS criteria require creatinine > 1.5 mg/dL.",
+    }]})
+    _, proposals = bld._extract_proposals(text)
+    assert proposals[0]["threshold"] == 1.5
+
+
+@pytest.mark.parametrize("raw", [None, "", "elevated", [], {}])
+def test_extract_proposals_survives_a_junk_threshold(raw):
+    text = _block({"proposals": [
+        {"lab": "Creatinine", "itemid": CREATININE, "direction": "high", "threshold": raw}]})
+    _, proposals = bld._extract_proposals(text)
+    assert proposals[0]["threshold"] is None       # falls back to the range
+    assert proposals[0]["itemid"] == CREATININE    # rule itself is still kept
+
+
+def test_catalog_exposes_reference_ranges_for_testable_labs(client):
+    """The builder can only show what "high" means if the catalog says so."""
+    labs = client.get("/api/builder/catalog").json()["labs"]
+    creat = next(l for l in labs if l["itemid"] == CREATININE)
+    assert (creat["normal_low"], creat["normal_high"]) == (0.6, 1.2)
+    assert creat["units"] == "mg/dL"
+    untracked = next(l for l in labs if not l["testable"])
+    assert untracked["normal_low"] is None and untracked["normal_high"] is None
+
+
+def test_threshold_round_trips_through_save_and_export(client):
+    created = client.post("/api/builder/syndromes", json={
+        "name": "HRS", "signals": [
+            {"itemid": CREATININE, "direction": "high", "threshold": 1.5}],
+        "min_signals": 1}).json()
+    assert created["signals"][0]["threshold"] == 1.5
+    exported = client.get("/api/builder/export").json()
+    assert exported["items"][0]["signals"][0]["threshold"] == 1.5
+
+
 def test_extract_proposals_marks_non_dataset_labs_research_only():
     text = _block({"proposals": [
         {"lab": "Total Bilirubin", "itemid": None, "direction": "high"},

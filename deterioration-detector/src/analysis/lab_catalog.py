@@ -57,6 +57,7 @@ def load_catalog() -> list[dict]:
                     n_rows = int(r.get("n_rows") or 0)
                 except ValueError:
                     n_rows = 0
+                tracked = LAB_DEFS.get(itemid)
                 out.append({
                     "itemid": itemid,
                     "label": label,
@@ -64,9 +65,15 @@ def load_catalog() -> list[dict]:
                     # ("CHEMISTRY" vs "Chemistry") into one bucket.
                     "category": (r.get("category") or "").strip().title(),
                     "fluid": (r.get("fluid") or "").strip(),
-                    "units": _first_unit(r.get("units")),
+                    # Prefer the tracked lab's own unit — it is the unit every
+                    # threshold and reference range in the app is expressed in.
+                    "units": tracked.unit if tracked else _first_unit(r.get("units")),
                     "n_rows": n_rows,
-                    "testable": itemid in LAB_DEFS,
+                    "testable": tracked is not None,
+                    # Present only for tracked labs: what "high"/"low" mean by
+                    # default, so the builder can show the number a rule fires at.
+                    "normal_low": tracked.low if tracked else None,
+                    "normal_high": tracked.high if tracked else None,
                 })
 
     out.sort(key=lambda x: x["n_rows"], reverse=True)

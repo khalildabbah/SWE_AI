@@ -1027,3 +1027,19 @@ table.factors td.impact.normal { color: var(--on-surface-variant); }
 .scoredby .material-symbols-outlined { font-size: 17px; color: var(--primary); flex-shrink: 0; margin-top: 1px; }
 /* the selector reads as "on" whenever it isn't the built-in score */
 .sort.patternon { border-color: var(--primary); color: var(--primary); }
+
+/* ── Pattern Builder: the value a rule actually fires at ── */
+/* "High" is not a number. Showing the bound next to every rule is what stops a
+   user agreeing to a threshold the UI never stated. */
+.bldbound { font-size: 11px; font-family: "Geist Mono", monospace; white-space: nowrap;
+  padding: 2px 7px; border-radius: 999px; color: var(--outline);
+  background: var(--surface-highest); border: 1px solid var(--outline-variant); }
+/* a rule carrying its own evidence-stated cut-off reads as deliberate */
+.bldbound.custom { color: var(--primary); border-color: var(--primary-container); }
+
+.bldthresholdrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bldthresholdrow input { width: 120px; }
+.bldcmp { font-family: "Geist Mono", monospace; font-size: 14px; color: var(--on-surface-variant); }
+.bldunit { font-size: 11.5px; color: var(--outline); text-transform: none; letter-spacing: normal; }
+.bldfieldhint { font-size: 11px; line-height: 1.45; color: var(--outline);
+  text-transform: none; letter-spacing: normal; font-weight: 400; }

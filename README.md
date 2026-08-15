@@ -291,7 +291,7 @@ The page is served by [`GET /api/rules`](#-api-endpoints), assembled **live from
 The other tabs show patterns *we* defined. The **Pattern Builder** tab lets you define your own, in three steps:
 
 1. **Choose a disease or syndrome** — anything you want to investigate.
-2. **Co-research it with the AI** — the co-pilot searches real literature through OpenAI's hosted `web_search` tool and proposes rules, each one lab moving in one direction, with a plain rationale and a citation. It summarises what each source *says* directly in the chat, so you can judge a proposal without opening the link. A search takes up to a minute and can be cancelled or retried.
+2. **Co-research it with the AI** — the co-pilot searches real literature through OpenAI's hosted `web_search` tool and proposes rules, each one lab moving in one direction, with a plain rationale, a citation, and the numeric cut-off the source states where there is one. It summarises what each source *says* directly in the chat, so you can judge a proposal without opening the link. A search takes up to a minute and can be cancelled or retried.
 3. **Review the rule set** — add rules by hand from a searchable catalog of ~700 labs, edit any rule's direction, rationale, evidence or citation, set how many rules must fire, then **run it across all 8,304 admissions**. Click any result to jump straight to that patient.
 
 Three things make a saved pattern real rather than a toy:
@@ -299,6 +299,21 @@ Three things make a saved pattern real rather than a toy:
 - **It is applied to every patient.** A saved pattern is evaluated on each admission alongside the built-in syndromes and appears on the Patient Monitoring page as a card marked **Custom**, carrying its citations.
 - **It can drive the scoring.** See below — this is the point of the tab.
 - **It is honest about what it tested.** Only the 8 tracked labs exist in this dataset. A rule over any other lab is kept as *research-only*: saved, cited and displayed, but never counted as a match — the pattern card and the cohort run both say so explicitly.
+
+#### What "High" means — and how to change it
+
+Every rule shows the value it actually fires at, next to the rule itself: `Creatinine ↑ High  > 1.2 mg/dL`.
+
+By default that is the edge of the lab's normal reference range, which is usually **far looser than a diagnostic criterion**. The consensus definition of hepatorenal syndrome asks for creatinine **> 1.5 mg/dL**, but a plain "high" rule fires from 1.2 — so it matches many patients with ordinary renal impairment and no liver disease at all.
+
+So a rule can carry **its own threshold**, typed into the rule editor in the lab's own units. Set creatinine to `> 1.5` and BUN to `> 25`, and the rule set finally tests what its citations actually claim. On the sample cohort that single change takes the same two-rule kidney pattern from **45% of admissions to 14.8%**.
+
+Two deliberate details:
+
+- **Severity still comes from the reference range.** How abnormal a value is clinically doesn't change because you chose a stricter threshold, so the Scoring Rule Book's bands still mean what they say.
+- **A rule that fires always scores at least 1 point**, so a threshold *looser* than the reference range can't match a patient and then contribute nothing.
+
+Leave the threshold empty and the rule means "outside the normal range", exactly as before.
 
 #### Scoring by a pattern
 

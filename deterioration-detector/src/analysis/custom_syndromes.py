@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from src.analysis.abnormal import classify, CRITICAL
+from src.analysis.abnormal import classify, rule_bound, rule_fires, CRITICAL
 from src.analysis.lab_catalog import load_catalog
 from src.analysis.trends import trend, WORSENING
 from src.ingestion.lab_dictionary import LAB_DEFS
@@ -155,6 +155,21 @@ def get_custom(key: str) -> dict | None:
     return _read_store().get(key)
 
 
+def _clean_threshold(raw) -> float | None:
+    """A rule's own firing value, or None to use the lab's reference range.
+
+    Anything unparseable becomes None rather than an error: a rule with a junk
+    threshold falls back to the reference range instead of being thrown away.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value == value and abs(value) != float("inf") else None
+
+
 def _clean_signals(signals: list[dict]) -> list[dict]:
     """Normalise pattern rules over ANY lab. Rules over the 8 tracked labs are
     marked in_dataset=True (runnable on patient data); rules over other real
@@ -178,6 +193,7 @@ def _clean_signals(signals: list[dict]) -> list[dict]:
             "name": name,
             "direction": direction,
             "in_dataset": in_dataset,
+            "threshold": _clean_threshold(s.get("threshold")),
             "rationale": (s.get("rationale") or "").strip(),
             "evidence": (s.get("evidence") or "").strip(),
             "citation": {
@@ -240,8 +256,13 @@ def _plain_summary(record: dict, signals: list[dict]) -> str:
     described = (record.get("description") or "").strip()
     if described:
         return described
-    parts = [f"{s['name']} {'above' if s['direction'] == HIGH else 'below'} its normal range"
-             for s in signals]
+    parts = []
+    for s in signals:
+        side = "above" if s["direction"] == HIGH else "below"
+        if s.get("threshold") is not None:
+            parts.append(f"{s['name']} {side} {s['threshold']:g}")
+        else:
+            parts.append(f"{s['name']} {side} its normal range")
     if len(parts) == 1:
         return f"A user-built pattern: {parts[0]}."
     return ("A user-built pattern, fired when at least "
@@ -276,7 +297,8 @@ def detect_custom(states: list) -> list[dict]:
         any_critical = any_worsening = False
         for sig in runnable:
             st = by_id.get(sig["itemid"])
-            if st is not None and _out_of_range(sig["itemid"], st.latest_value, sig["direction"]):
+            if st is not None and _out_of_range(sig["itemid"], st.latest_value,
+                                                sig["direction"], sig.get("threshold")):
                 status = classify(sig["itemid"], st.latest_value)
                 tr = trend(sig["itemid"], st.series)
                 any_critical = any_critical or status == CRITICAL
@@ -284,12 +306,16 @@ def detect_custom(states: list) -> list[dict]:
                 matched.append({
                     "itemid": sig["itemid"], "test_name": st.test_name, "unit": st.unit,
                     "value": st.latest_value, "direction": sig["direction"],
-                    "status": status, "trend": tr,
+                    "status": status, "trend": tr, "threshold": sig.get("threshold"),
+                    "bound": rule_bound(sig["itemid"], sig["direction"], sig.get("threshold")),
                     "rationale": sig["rationale"], "citation": sig["citation"],
                 })
             else:
                 missing.append({"itemid": sig["itemid"], "test_name": sig["name"],
-                                "direction": sig["direction"]})
+                                "direction": sig["direction"],
+                                "threshold": sig.get("threshold"),
+                                "bound": rule_bound(sig["itemid"], sig["direction"],
+                                                    sig.get("threshold"))})
 
         # The saved threshold can exceed the number of testable rules; cap it the
         # same way run_on_cohort() does so the pattern stays evaluable.
@@ -328,13 +354,10 @@ def detect_custom(states: list) -> list[dict]:
 
 # ── Execution against real patient data ──────────────────────────────────────
 
-def _out_of_range(itemid: int, value: float, direction: str) -> bool:
-    d = LAB_DEFS[itemid]
-    if direction == HIGH:
-        return value > d.high
-    if direction == LOW:
-        return value < d.low
-    return False
+def _out_of_range(itemid: int, value: float, direction: str,
+                  threshold: float | None = None) -> bool:
+    """Thin alias for the shared rule test, kept for readability at call sites."""
+    return rule_fires(itemid, value, direction, threshold)
 
 
 def run_on_cohort(con, signals: list[dict], min_signals: int,
@@ -392,10 +415,13 @@ def run_on_cohort(con, signals: list[dict], min_signals: int,
         hits = []
         for sig in runnable:
             v = vals.get(sig["itemid"])
-            if v is not None and _out_of_range(sig["itemid"], v, sig["direction"]):
+            if v is not None and _out_of_range(sig["itemid"], v, sig["direction"],
+                                               sig.get("threshold")):
                 hits.append({
                     "itemid": sig["itemid"], "name": sig["name"],
                     "direction": sig["direction"], "value": round(v, 2),
+                    "bound": rule_bound(sig["itemid"], sig["direction"],
+                                        sig.get("threshold")),
                 })
         if len(hits) >= effective_min:
             matches.append({

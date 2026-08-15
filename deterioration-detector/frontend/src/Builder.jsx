@@ -65,6 +65,35 @@ function renderText(text) {
 
 const dirLabel = (d) => (d === "high" ? "↑ High" : "↓ Low");
 
+/* What a rule actually fires at, in words: "> 1.2 mg/dL".
+ * "High" on its own is not a number, and a user agreeing to a rule deserves to
+ * see the value it will be tested at — especially when their own evidence
+ * quotes a different one. */
+function ruleBound(rule, lab) {
+  const custom = rule.threshold != null && rule.threshold !== "";
+  const fallback = rule.direction === "high" ? lab?.normal_high : lab?.normal_low;
+  const value = custom ? Number(rule.threshold) : fallback;
+  if (value == null || Number.isNaN(value)) return null;
+  const unit = lab?.units ? ` ${lab.units}` : "";
+  return {
+    text: `${rule.direction === "high" ? ">" : "<"} ${value}${unit}`,
+    custom,
+  };
+}
+
+function Bound({ rule, lab }) {
+  const b = ruleBound(rule, lab);
+  if (!b) return null;
+  return (
+    <span className={`bldbound ${b.custom ? "custom" : ""}`}
+      title={b.custom
+        ? "This rule's own threshold, from the evidence — not the lab's reference range."
+        : "The edge of this lab's normal reference range. Set a threshold on the rule to fire at the value your source states instead."}>
+      {b.text}
+    </span>
+  );
+}
+
 function Citation({ citation }) {
   if (citation?.url)
     return <a className="bldcite" href={citation.url} target="_blank" rel="noreferrer">
@@ -156,6 +185,9 @@ export default function Builder({ onOpenPatient }) {
   // testable (tracked) labs, keyed by lowercased label, for resolving names
   const testableByName = useMemo(() => Object.fromEntries(
     catalog.filter((l) => l.testable).map((l) => [l.label.toLowerCase(), l])), [catalog]);
+  // …and by itemid, so a rule can show the value it fires at
+  const labById = useMemo(() => Object.fromEntries(
+    catalog.filter((l) => l.testable).map((l) => [l.itemid, l])), [catalog]);
   // identity tolerant of research-only labs (itemid is null): fall back to name
   const ruleKey = (r) =>
     `${r.itemid != null ? `id:${r.itemid}` : `nm:${(r.name || "").toLowerCase()}`}-${r.direction}`;
@@ -170,6 +202,7 @@ export default function Builder({ onOpenPatient }) {
       name: rule.name || (known ? known.label : ""),
       direction: rule.direction,
       in_dataset: rule.in_dataset != null ? rule.in_dataset : (rule.itemid != null || !!known),
+      threshold: rule.threshold != null ? rule.threshold : null,
       rationale: rule.rationale || "",
       evidence: rule.evidence || "",
       citation: rule.citation || { title: "", url: "" },
@@ -337,6 +370,7 @@ export default function Builder({ onOpenPatient }) {
     setRules((s.signals || []).map((sg) => ({
       itemid: sg.itemid != null ? sg.itemid : null, name: sg.name, direction: sg.direction,
       in_dataset: sg.in_dataset != null ? sg.in_dataset : sg.itemid != null,
+      threshold: sg.threshold != null ? sg.threshold : null,
       rationale: sg.rationale || "", evidence: sg.evidence || "",
       citation: sg.citation || { title: "", url: "" },
     })));
@@ -579,6 +613,7 @@ export default function Builder({ onOpenPatient }) {
                               <div className="bldprop-main">
                                 <span className="bldpillwrap">
                                   <span className={`bldpill ${p.direction}`}>{p.name} {dirLabel(p.direction)}</span>
+                                  <Bound rule={p} lab={labById[p.itemid]} />
                                   {!p.in_dataset && <span className="bldtag-ro" title="This lab isn't in the dataset — saved for research, can't be tested on patient data">research-only</span>}
                                 </span>
                                 <button className="bldadd" disabled={added} onClick={() => addRule(p)}>
@@ -668,6 +703,7 @@ export default function Builder({ onOpenPatient }) {
                     <li key={key} className={`bldrule ${open ? "editing" : ""}`}>
                       <span className="bldpillwrap">
                         <span className={`bldpill ${r.direction}`}>{r.name} {dirLabel(r.direction)}</span>
+                        <Bound rule={r} lab={labById[r.itemid]} />
                         {!r.in_dataset && <span className="bldtag-ro" title="Not in the dataset — saved for research, not tested on patient data">research-only</span>}
                         {isUncited(r) && <span className="bldtag-un" title="No source attached — add one so this rule is as evidence-backed as the rest">uncited</span>}
                       </span>
@@ -681,6 +717,32 @@ export default function Builder({ onOpenPatient }) {
                               <option value="low">↓ Low</option>
                             </select>
                           </label>
+                          {r.in_dataset && (
+                            <label>Fires at
+                              <div className="bldthresholdrow">
+                                <span className="bldcmp">{r.direction === "high" ? ">" : "<"}</span>
+                                <input type="number" step="any" value={r.threshold ?? ""}
+                                  placeholder={String(r.direction === "high"
+                                    ? labById[r.itemid]?.normal_high ?? ""
+                                    : labById[r.itemid]?.normal_low ?? "")}
+                                  onChange={(e) => updateRule(key, {
+                                    threshold: e.target.value === "" ? null : Number(e.target.value),
+                                  })} />
+                                <span className="bldunit">{labById[r.itemid]?.units}</span>
+                                {r.threshold != null && (
+                                  <button className="bldcancel" type="button"
+                                    onClick={() => updateRule(key, { threshold: null })}>
+                                    use normal range
+                                  </button>
+                                )}
+                              </div>
+                              <span className="bldfieldhint">
+                                {r.threshold != null
+                                  ? "Your source's cut-off — this is the value the rule is tested at."
+                                  : `Empty means the edge of the normal range (${labById[r.itemid]?.normal_low}–${labById[r.itemid]?.normal_high} ${labById[r.itemid]?.units || ""}). If your evidence states a cut-off, put it here.`}
+                              </span>
+                            </label>
+                          )}
                           <label>Rationale
                             <textarea rows={2} value={r.rationale} placeholder="One plain sentence: why this lab, this direction?"
                               onChange={(e) => updateRule(key, { rationale: e.target.value })} />

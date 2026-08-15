@@ -26,9 +26,8 @@ stays truthful. Only two things differ, both necessarily:
 """
 from dataclasses import dataclass, field
 
-from src.analysis.abnormal import classify, points
+from src.analysis.abnormal import classify, points, rule_bound, rule_fires
 from src.analysis.trends import WORSENING, trend
-from src.ingestion.lab_dictionary import LAB_DEFS
 
 LOW, MEDIUM, HIGH = "Low", "Medium", "High"
 
@@ -90,10 +89,10 @@ def score_admission(states: list[LabState]) -> RiskResult:
 
 # ── Scoring by a user-built pattern ──────────────────────────────────────────
 
-def _matches_direction(itemid: int, value: float, direction: str) -> bool:
-    """Is this value outside the normal range on the side the rule cares about?"""
-    d = LAB_DEFS[itemid]
-    return value > d.high if direction == "high" else value < d.low
+def _matches_direction(itemid: int, value: float, direction: str,
+                       threshold: float | None = None) -> bool:
+    """Does the rule fire — at its own threshold, or the reference range?"""
+    return rule_fires(itemid, value, direction, threshold)
 
 
 def categorize_for_max(score: int, max_score: int) -> str:
@@ -134,11 +133,16 @@ def score_pattern(states: list[LabState], signals: list[dict]) -> RiskResult:
 
         # A lab moving the way the pattern does NOT care about is not evidence
         # for the syndrome, so it contributes nothing at all.
-        on_side = _matches_direction(itemid, st.latest_value, direction)
+        threshold = sig.get("threshold")
+        on_side = _matches_direction(itemid, st.latest_value, direction, threshold)
         status = classify(itemid, st.latest_value)
         # the pattern's own direction decides what "getting worse" means here
         tr = trend(itemid, st.series, worsening=direction)
-        sev_pts = points(itemid, st.latest_value) if on_side else 0
+        # Severity stays anchored to the reference range: how abnormal a value is
+        # clinically does not change because the rule set a stricter threshold.
+        # A rule that fired is always worth something though, so a threshold
+        # LOOSER than the range can't match and still score zero.
+        sev_pts = max(1, points(itemid, st.latest_value)) if on_side else 0
         trend_pts = 1 if (on_side and tr == WORSENING) else 0
         lab_total = sev_pts + trend_pts
         score += lab_total
@@ -152,6 +156,8 @@ def score_pattern(states: list[LabState], signals: list[dict]) -> RiskResult:
             "points": lab_total,
             "direction": direction,
             "matched": on_side,
+            "threshold": threshold,
+            "bound": rule_bound(itemid, direction, threshold),
         })
 
     contributions.sort(key=lambda c: c["points"], reverse=True)

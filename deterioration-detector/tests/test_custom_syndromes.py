@@ -272,3 +272,50 @@ def test_detect_custom_writes_a_plain_summary_when_none_was_given():
 
 def test_detect_custom_returns_nothing_when_no_patterns_are_saved():
     assert cs.detect_custom([_state(CREATININE, 9.0)]) == []
+
+
+# ---- per-rule thresholds ----
+def test_save_keeps_a_rules_threshold():
+    rec = cs.save_custom("HRS-ish", "", [
+        {"itemid": CREATININE, "direction": "high", "threshold": 1.5}], 1)
+    assert rec["signals"][0]["threshold"] == 1.5
+
+
+def test_save_defaults_the_threshold_to_none():
+    rec = cs.save_custom("Plain", "", [{"itemid": CREATININE, "direction": "high"}], 1)
+    assert rec["signals"][0]["threshold"] is None
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "not a number", None, float("inf"), float("nan")])
+def test_an_unusable_threshold_falls_back_to_the_reference_range(raw):
+    """A junk threshold must not discard the rule — it just reverts to meaning
+    'outside the normal range'."""
+    rec = cs.save_custom("Junk", "", [
+        {"itemid": CREATININE, "direction": "high", "threshold": raw}], 1)
+    assert rec["signals"][0]["threshold"] is None
+
+
+def test_a_threshold_narrows_detection():
+    cs.save_custom("Strict Creat", "", [
+        {"itemid": CREATININE, "direction": "high", "threshold": 1.5}], 1)
+    # 1.3 is outside the 0.6-1.2 reference range but below the rule's cut-off
+    assert cs.detect_custom([_state(CREATININE, 1.3)]) == []
+    card = cs.detect_custom([_state(CREATININE, 1.6)])[0]
+    assert card["matched"][0]["bound"] == 1.5
+    assert card["matched"][0]["threshold"] == 1.5
+
+
+def test_run_on_cohort_honours_a_threshold():
+    signals = [{"itemid": CREATININE, "direction": "high", "threshold": 1.5}]
+    rows = [(1, 1, CREATININE, 1.3), (2, 2, CREATININE, 2.0)]
+    out = cs.run_on_cohort(FakeCon(rows, total=2), signals, min_signals=1)
+    assert out["n_matched"] == 1                       # only the 2.0 admission
+    assert out["examples"][0]["subject_id"] == 2
+    assert out["examples"][0]["matched"][0]["bound"] == 1.5
+
+
+def test_plain_summary_mentions_the_threshold():
+    cs.save_custom("Numbers", "", [
+        {"itemid": CREATININE, "direction": "high", "threshold": 1.5}], 1)
+    card = cs.detect_custom([_state(CREATININE, 2.0)])[0]
+    assert "above 1.5" in card["plain"]
