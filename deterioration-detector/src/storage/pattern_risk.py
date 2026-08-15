@@ -23,12 +23,13 @@ It is rebuilt whenever the pattern that produced it is saved or imported.
 """
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
 from pathlib import Path
 
 import duckdb
 
-from src.analysis.risk_score import LabState, score_pattern
+from src.analysis.pattern_engine import CRITERIA_VERSION, LabState, evaluate_pattern
 from src.storage.db import connect
 from src.storage import pattern_store
 
@@ -47,9 +48,26 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     category    VARCHAR,
     n_matched   INTEGER,
     n_high      INTEGER,
-    n_worsening INTEGER
+    n_worsening INTEGER,
+    -- what counted as a match when these rows were written; rows from an older
+    -- definition are ignored rather than silently served
+    criteria    INTEGER DEFAULT 0
 )
 """
+
+
+# Saving a pattern schedules a rebuild in the background, and the user can also
+# trigger one directly. Those two run on separate connections, and each one's
+# "delete then insert" cannot see the other's uncommitted rows — so both commit
+# and every admission lands in the cache twice. Serialising per pattern is the
+# honest fix: rebuilds are seconds apart at worst and never need to overlap.
+_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _build_lock(key: str) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _BUILD_LOCKS.setdefault(key, threading.Lock())
 
 
 def _cache_connect():
@@ -69,22 +87,29 @@ def attach(con) -> str:
     """
     if pattern_store.use_cloud():
         con.execute(DDL)
-        return TABLE
+        return f"(SELECT * FROM {TABLE} WHERE criteria = {CRITERIA_VERSION})"
     if not CACHE_DB.exists():
         return ""                             # nothing built yet
     con.execute(f"ATTACH IF NOT EXISTS '{CACHE_DB.as_posix()}' AS pr (READ_ONLY)")
-    return f"pr.main.{TABLE}"
+    return (f"(SELECT * FROM pr.main.{TABLE} "
+            f"WHERE criteria = {CRITERIA_VERSION})")
 
 
 def is_built(pattern_key: str) -> bool:
-    """Has this pattern's ranking been computed yet?"""
+    """Has this pattern's ranking been computed by the CURRENT match definition?
+
+    Rows written before the definition changed are not a valid cache — treating
+    them as absent forces a rebuild instead of serving a ranking that disagrees
+    with the pattern.
+    """
     if not pattern_store.use_cloud() and not CACHE_DB.exists():
         return False
     con = _cache_connect()
     try:
         con.execute(DDL)
         n = con.execute(
-            f"SELECT COUNT(*) FROM {TABLE} WHERE pattern_key = ?", [pattern_key]).fetchone()[0]
+            f"SELECT COUNT(*) FROM {TABLE} WHERE pattern_key = ? AND criteria = ?",
+            [pattern_key, CRITERIA_VERSION]).fetchone()[0]
     finally:
         con.close()
     return n > 0
@@ -106,14 +131,19 @@ def build(pattern: dict) -> int:
     """Score every admission against one pattern and cache the ranking.
 
     Returns how many admissions were scored. A pattern with no testable rule
-    caches nothing — there would be nothing to rank by.
+    caches nothing — there would be nothing to rank by. Concurrent rebuilds of
+    the same pattern are serialised; the last one wins.
     """
     key = pattern.get("key") or ""
     signals = [s for s in (pattern.get("signals") or [])
                if s.get("in_dataset") and s.get("itemid") is not None]
     if not key or not signals:
         return 0
+    with _build_lock(key):
+        return _build_locked(key, pattern, signals)
 
+
+def _build_locked(key: str, pattern: dict, signals: list[dict]) -> int:
     itemids = sorted({s["itemid"] for s in signals})
     placeholders = ", ".join("?" for _ in itemids)
 
@@ -155,23 +185,35 @@ def build(pattern: dict) -> int:
                      latest_value=vals[-1], series=vals)
             for iid, vals in series[adm].items()
         ]
-        risk = score_pattern(states, signals)
-        if risk.score <= 0:
-            continue  # nothing matched — keep the cache to the admissions that rank
-        n_matched = sum(1 for c in risk.contributions if c["matched"])
-        n_high = sum(1 for c in risk.contributions if c["status"] == "critical")
-        n_wors = sum(1 for c in risk.contributions
-                     if c["matched"] and c["trend"] == "worsening")
-        batch.append((key, adm[0], adm[1], risk.score, risk.category,
-                      n_matched, n_high, n_wors))
+        # Rank exactly the admissions the pattern says it matches. Scoring
+        # "anything with some evidence" would list patients here who show no
+        # pattern card when opened and are absent from the pattern's own cohort
+        # run — the board would be claiming a match the pattern never made.
+        result = evaluate_pattern(states, signals, pattern.get("min_signals"))
+        if not result.matched:
+            continue
+        n_high = sum(1 for r in result.fired_rules if r.status == "critical")
+        n_wors = sum(1 for r in result.fired_rules if r.trend == "worsening")
+        batch.append((key, adm[0], adm[1], result.score, result.category,
+                      result.n_fired, n_high, n_wors, CRITERIA_VERSION))
 
     cache = _cache_connect()
     try:
         cache.execute(DDL)
-        cache.execute(f"DELETE FROM {TABLE} WHERE pattern_key = ?", [key])
-        if batch:
-            cache.executemany(
-                f"INSERT INTO {TABLE} VALUES (?,?,?,?,?,?,?,?)", batch)
+        # Replace in one transaction. A save schedules a rebuild in the
+        # background and the user can also trigger one explicitly; without this
+        # the two interleave as delete/delete/insert/insert and the pattern ends
+        # up with every admission cached twice.
+        cache.execute("BEGIN TRANSACTION")
+        try:
+            cache.execute(f"DELETE FROM {TABLE} WHERE pattern_key = ?", [key])
+            if batch:
+                cache.executemany(
+                    f"INSERT INTO {TABLE} VALUES (?,?,?,?,?,?,?,?,?)", batch)
+            cache.execute("COMMIT")
+        except Exception:
+            cache.execute("ROLLBACK")
+            raise
     finally:
         cache.close()
     return len(batch)

@@ -3,6 +3,7 @@ python-dotenv==1.2.2
 openai==2.43.0  # OpenAI client for the dataset Q&A chatbot
 fastapi==0.137.2
 httpx==0.28.1  # required by fastapi.testclient.TestClient (tests/test_builder.py)
+hypothesis==6.165.9  # property-based tests for the pattern engine (tests only)
 pandas==3.0.3
 pydantic==2.13.4
 pydantic_core==2.46.4

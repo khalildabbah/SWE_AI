@@ -192,7 +192,10 @@ def admissions(
             if table:
                 where = "WHERE r.pattern_key = ?" + (" AND r.category = ?" if category else "")
                 params = [active["key"]] + ([category] if category else [])
-                order = "r.score DESC" if sort == "score" else "a.n_measurements DESC"
+                # A total order: score alone ties for thousands of rows, and without a
+                # tiebreaker LIMIT/OFFSET paging repeats some rows and skips others.
+                order = (("r.score DESC" if sort == "score" else "a.n_measurements DESC")
+                         + ", r.subject_id, r.hadm_id")
                 rows = con.execute(f"""
                     SELECT r.subject_id, r.hadm_id, r.score, r.category,
                            r.n_high, r.n_worsening, a.n_measurements, a.span_hours
@@ -212,7 +215,10 @@ def admissions(
 
         where = "WHERE r.category = ?" if category else ""
         params = [category] if category else []
-        order = "r.score DESC" if sort == "score" else "a.n_measurements DESC"
+        # A total order: score alone ties for thousands of rows, and without a
+        # tiebreaker LIMIT/OFFSET paging repeats some rows and skips others.
+        order = (("r.score DESC" if sort == "score" else "a.n_measurements DESC")
+                 + ", r.subject_id, r.hadm_id")
         rows = con.execute(f"""
             SELECT r.subject_id, r.hadm_id, r.score, r.category,
                    r.n_high, r.n_worsening, a.n_measurements, a.span_hours
