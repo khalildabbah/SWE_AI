@@ -10,14 +10,18 @@ lab plus its recent window, and re-scores after each new measurement.
 """
 from collections import defaultdict, deque
 
-from src.analysis.risk_score import LabState, score_admission
+from src.analysis.risk_score import LabState, score_admission, score_pattern
 
 WINDOW = 3
 
 
-def compute_trajectory(series: dict) -> list[dict]:
+def compute_trajectory(series: dict, signals: list[dict] | None = None) -> list[dict]:
     """
     series: {itemid: {"test_name","unit","points":[(charttime,value)...]}}
+    signals: cleaned rules of a user-built pattern. When given, the curve plots
+        that pattern's score over time instead of the built-in one, so the
+        headline visual answers "how has this patient tracked against THIS
+        syndrome?" rather than "how abnormal have they been overall?".
     returns: [{"time": iso, "score": int, "category": str}, ...] over time
     """
     # flatten to one timeline of (time, itemid, value), oldest first
@@ -38,6 +42,6 @@ def compute_trajectory(series: dict) -> list[dict]:
                      latest_value=vals[-1], series=list(vals))
             for i, vals in recent.items()
         ]
-        r = score_admission(states)
+        r = score_pattern(states, signals) if signals else score_admission(states)
         traj.append({"time": t.isoformat(), "score": r.score, "category": r.category})
     return traj

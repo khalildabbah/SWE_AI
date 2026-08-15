@@ -27,13 +27,14 @@ import json
 import os
 import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from src.storage.db import connect
+from src.storage import pattern_risk
 from src.analysis.custom_syndromes import (
-    available_labs, list_custom, save_custom, delete_custom, run_on_cohort,
-    resolve_lab,
+    available_labs, list_custom, get_custom, save_custom, delete_custom,
+    run_on_cohort, resolve_lab,
 )
 from src.analysis.lab_catalog import load_catalog
 from src.ingestion.lab_dictionary import LAB_DEFS
@@ -171,8 +172,13 @@ def get_syndromes():
 
 
 @router.post("/syndromes")
-def post_syndrome(body: SyndromeIn):
-    """Create or update a custom syndrome."""
+def post_syndrome(body: SyndromeIn, background: BackgroundTasks):
+    """Create or update a custom syndrome.
+
+    Editing the rules invalidates any cohort ranking built from the old ones, so
+    the cache is dropped immediately and rebuilt in the background — the save
+    returns straight away rather than waiting on a full-cohort pass.
+    """
     try:
         record = save_custom(
             name=body.name, description=body.description,
@@ -181,6 +187,8 @@ def post_syndrome(body: SyndromeIn):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    pattern_risk.clear(record["key"])
+    background.add_task(pattern_risk.build, record)
     return record
 
 
@@ -188,7 +196,26 @@ def post_syndrome(body: SyndromeIn):
 def remove_syndrome(key: str):
     if not delete_custom(key):
         raise HTTPException(404, "No such custom syndrome.")
+    pattern_risk.clear(key)
     return {"deleted": key}
+
+
+@router.post("/syndromes/{key}/rank")
+def rank_syndrome(key: str):
+    """Score the whole cohort against one pattern and cache the ranking.
+
+    Normally this happens in the background on save; this endpoint is for
+    rebuilding on demand, and it reports how many admissions ranked.
+    """
+    record = get_custom(key)
+    if not record:
+        raise HTTPException(404, "No such custom syndrome.")
+    n = pattern_risk.build(record)
+    if n == 0:
+        raise HTTPException(
+            400, "This pattern has no rule over a lab in the dataset, so the "
+                 "cohort can't be ranked by it.")
+    return {"pattern": key, "n_ranked": n}
 
 
 @router.get("/export")

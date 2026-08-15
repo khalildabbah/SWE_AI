@@ -63,6 +63,7 @@ const TIPS = {
   warn: "This patient has one or more labs critically out of range.",
   search: "Filter the list by patient or admission ID.",
   sort: "Order the list by risk score, or by how much lab data each admission has.",
+  scoringPattern: "Which pattern decides the risk score. The built-in score counts all 8 labs equally. Pick a pattern you built and every score, badge and ranking is recomputed from that pattern's rules instead — so the list ranks patients by how much they look like that syndrome.",
   lead_time: "How many hours before the first critically out-of-range value our risk score had already escalated. The core early-warning question this project asks.",
   lt_concern: "First concern = the first time the score left Low (reached Medium or High). The earliest hint of trouble.",
   lt_alert: "High alert = the first time the score reached High, the top triage category.",
@@ -103,22 +104,43 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(false);
+  // Which pattern drives scoring. "" = the built-in 8-lab risk score.
+  const [scoringPattern, setScoringPattern] = useState("");
+  const [patterns, setPatterns] = useState([]);
 
   useEffect(() => {
     fetch("/api/stats").then((r) => r.json()).then(setStats).catch(() => {});
   }, []);
+
+  // Saved patterns that can actually score — one needs at least one rule over a
+  // lab this dataset carries, or there is nothing to rank patients by.
+  const loadPatterns = () =>
+    fetch("/api/builder/syndromes").then((r) => r.json())
+      .then((d) => setPatterns((d.items || []).filter(
+        (p) => (p.signals || []).some((s) => s.in_dataset && s.itemid != null))))
+      .catch(() => {});
+
+  useEffect(() => { loadPatterns(); }, []);
+
+  // A pattern deleted elsewhere shouldn't leave the dashboard scoring by a ghost.
+  useEffect(() => {
+    if (scoringPattern && !patterns.some((p) => p.key === scoringPattern)) {
+      setScoringPattern("");
+    }
+  }, [patterns, scoringPattern]);
 
   useEffect(() => {
     setBoardLoading(true);
     setBoardError(false);
     const params = new URLSearchParams({ limit: "100", sort });
     if (filter) params.set("category", filter);
+    if (scoringPattern) params.set("pattern", scoringPattern);
     fetch(`/api/admissions?${params}`)
       .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then((d) => setBoard(d.items))
       .catch(() => { setBoard([]); setBoardError(true); })
       .finally(() => setBoardLoading(false));
-  }, [filter, sort]);
+  }, [filter, sort, scoringPattern]);
 
   // Client-side search over the loaded cohort (by patient or admission ID).
   const visible = useMemo(() => {
@@ -142,11 +164,12 @@ export default function App() {
     if (!selected) { setDetail(null); return; }
     setDetail(null);
     setDetailError(false);
-    fetch(`/api/admissions/${selected.subject_id}/${selected.hadm_id}`)
+    const q = scoringPattern ? `?pattern=${encodeURIComponent(scoringPattern)}` : "";
+    fetch(`/api/admissions/${selected.subject_id}/${selected.hadm_id}${q}`)
       .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then(setDetail)
       .catch(() => setDetailError(true));
-  }, [selected]);
+  }, [selected, scoringPattern]);
 
   // Keyboard navigation: ↑/↓ move through the visible list.
   useEffect(() => {
@@ -216,6 +239,19 @@ export default function App() {
               <option value="measurements">Sort: most lab data</option>
             </select>
           </div>
+
+          {patterns.length > 0 && (
+            <div className="sortwrap">
+              <select className={`sort ${scoringPattern ? "patternon" : ""}`}
+                value={scoringPattern} title={TIPS.scoringPattern}
+                onChange={(e) => setScoringPattern(e.target.value)}>
+                <option value="">Score by: all 8 labs (built-in)</option>
+                {patterns.map((p) => (
+                  <option key={p.key} value={p.key}>Score by: {p.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="list">
             {boardLoading && <div className="placeholder small">Loading admissions…</div>}
@@ -358,12 +394,16 @@ function Detail({ d, meta }) {
 
   return (
     <>
+      <ScoredBy risk={d.risk} />
+
       {/* Bento header: score card + metric cluster */}
       <section className="bento">
         <div className={`panel scorecard ${cat}`}>
           <Icon name="warning" className="ghost" />
           <div>
-            <div className="eyebrow">Current Risk Index</div>
+            <div className="eyebrow">
+              {d.risk.pattern ? `Risk Index · ${d.risk.pattern_name}` : "Current Risk Index"}
+            </div>
             <h2>Patient {d.subject_id}</h2>
             <div className="adm">ADMISSION ID: {d.hadm_id}</div>
           </div>
@@ -480,6 +520,22 @@ function Detail({ d, meta }) {
   );
 }
 
+/* Says out loud which rules produced the score on screen. Without this the
+ * numbers silently mean two different things depending on the selector. */
+function ScoredBy({ risk }) {
+  if (!risk?.pattern) return null;
+  return (
+    <div className="scoredby">
+      <Icon name="construction" />
+      <span>
+        Scored by your pattern <b>{risk.pattern_name}</b> — only its labs count,
+        and only when they move the way the pattern says. Switch back to
+        “all 8 labs” in the sidebar for the built-in score.
+      </span>
+    </div>
+  );
+}
+
 // ── Patient Monitoring page: clinical-syndrome detection + live lab vitals ──
 function Monitoring({ d, meta }) {
   const cat = d.risk.category;
@@ -510,10 +566,16 @@ function Monitoring({ d, meta }) {
           </div>
           <div className="stat">
             <span className="badge" title={TIPS.category}>{cat} Risk</span>
-            <span className="lbl">overall score {d.risk.score}</span>
+            <span className="lbl">
+              {d.risk.pattern
+                ? `score ${d.risk.score} of ${d.risk.max_score}`
+                : `overall score ${d.risk.score}`}
+            </span>
           </div>
         </div>
       </section>
+
+      <ScoredBy risk={d.risk} />
 
       {/* Clinical syndrome detection — the star of this page */}
       <section className="panel section">

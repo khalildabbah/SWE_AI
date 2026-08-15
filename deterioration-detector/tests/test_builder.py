@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import src.api.builder as bld
 import src.storage.pattern_store as ps
+import src.storage.pattern_risk as pr
 
 CREATININE = 50912
 UREA = 51006
@@ -22,10 +23,18 @@ UREA = 51006
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path, monkeypatch):
     """Point persistence at a temp JSON file and keep every test off MotherDuck
-    and off the real OpenAI API, whatever the developer's environment has set."""
+    and off the real OpenAI API, whatever the developer's environment has set.
+
+    Saving a pattern schedules a full-cohort ranking in the background; that is
+    covered on its own below, so here it is stubbed out to keep the API tests
+    from scanning the real database.
+    """
     monkeypatch.delenv("MOTHERDUCK_TOKEN", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(ps, "STORE", tmp_path / "custom_syndromes.json")
+    monkeypatch.setattr(pr, "CACHE_DB", tmp_path / "pattern_risk.duckdb")
+    monkeypatch.setattr(bld.pattern_risk, "build", lambda pattern: 0)
+    monkeypatch.setattr(bld.pattern_risk, "clear", lambda key: None)
     yield
 
 
