@@ -137,6 +137,9 @@ export default function App() {
   const [sort, setSort] = useState("score");
   const [query, setQuery] = useState("");
   const [board, setBoard] = useState([]);
+  // How many admissions match the current filter server-side — the board itself
+  // only holds the top page of them, so the rail can say "100 of 20,542".
+  const [boardTotal, setBoardTotal] = useState(0);
   const [boardLoading, setBoardLoading] = useState(true);
   const [boardError, setBoardError] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -188,8 +191,8 @@ export default function App() {
     if (scoringPattern) params.set("pattern", scoringPattern);
     fetch(`/api/admissions?${params}`)
       .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
-      .then((d) => setBoard(d.items))
-      .catch(() => { setBoard([]); setBoardError(true); })
+      .then((d) => { setBoard(d.items); setBoardTotal(d.total ?? d.items.length); })
+      .catch(() => { setBoard([]); setBoardTotal(0); setBoardError(true); })
       .finally(() => setBoardLoading(false));
   }, [filter, sort, scoringPattern, dataVersion]);
 
@@ -302,7 +305,14 @@ export default function App() {
         </nav>
 
         <div className="explorer">
-          <div className="raillabel">Cohort</div>
+          <div className="raillabel">
+            <span>Cohort</span>
+            {!boardLoading && !boardError && visible.length > 0 && (
+              <span className="railcount" title={`${visible.length} shown of ${boardTotal} matching admissions — scroll for more`}>
+                {visible.length}{boardTotal > visible.length ? ` / ${boardTotal.toLocaleString()}` : ""}
+              </span>
+            )}
+          </div>
           <div className="searchwrap">
             <Icon name="search" />
             <input className="search" type="search" value={query}
@@ -362,23 +372,23 @@ export default function App() {
                       {a.category} · <span className="pts">{a.score}</span>
                     </span>
                   </div>
-                  <div className="meta" title={`${a.n_measurements} labs · ${a.span_hours}h · ${a.n_high} critical`}>
-                    Adm {a.hadm_id} · {a.n_measurements} labs · {a.span_hours}h
+                  {/* Meta and the worsening count share one line — the rail has
+                      little height, and a third line halved how many patients fit. */}
+                  <div className="meta">
+                    <span title={`${a.n_measurements} labs · ${a.span_hours}h · ${a.n_high} critical`}>
+                      Adm {a.hadm_id} · {a.n_measurements} labs · {a.span_hours}h
+                    </span>
+                    {a.n_worsening > 0 && (
+                      <span className="worse"
+                        title={`${a.n_worsening} worsening metric${a.n_worsening > 1 ? "s" : ""} detected`}>
+                        <Icon name="trending_up" />{a.n_worsening}
+                      </span>
+                    )}
                   </div>
-                  {a.n_worsening > 0 && (
-                    <div className="worse"><Icon name="history" />{a.n_worsening} worsening metric{a.n_worsening > 1 ? "s" : ""} detected</div>
-                  )}
                 </div>
               );
             })}
           </div>
-        </div>
-
-        <div className="railfoot">
-          <nav className="nav">
-            <a><Icon name="help" /><span>Support</span></a>
-            <a><Icon name="logout" /><span>Logout</span></a>
-          </nav>
         </div>
       </aside>
 

@@ -195,15 +195,18 @@ body {
   background: var(--surface-lowest);
   border-right: 1px solid var(--outline-variant);
   display: flex; flex-direction: column;
-  padding: var(--sp-4) var(--sp-3) var(--sp-3);
-  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  gap: var(--sp-3);
+  /* Safety valve for short windows: the list keeps its minimum height and the
+     rail scrolls, rather than the list being crushed to a single card. */
+  overflow-y: auto;
 }
 
 /* Brand: icon in a tinted tile so the wordmark isn't competing with it */
-.brand { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1) var(--sp-2); }
+.brand { display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-2); }
 .brand .material-symbols-outlined {
-  color: var(--primary); font-size: 22px; flex-shrink: 0;
-  width: 38px; height: 38px; border-radius: var(--radius);
+  color: var(--primary); font-size: 20px; flex-shrink: 0;
+  width: 34px; height: 34px; border-radius: var(--radius);
   background: var(--primary-soft); display: grid; place-items: center;
 }
 .brand h1 { font-size: 16px; font-weight: 700; color: var(--on-surface); margin: 0; letter-spacing: -0.01em; line-height: 1.2; }
@@ -211,14 +214,21 @@ body {
 
 /* Small uppercase label that opens each rail section */
 .raillabel {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--outline); padding: 0 var(--sp-2); margin-bottom: var(--sp-1);
+  color: var(--outline); padding: 0 var(--sp-2);
+}
+/* "100 / 20,542" — makes it obvious the list scrolls past what's on screen */
+.railcount {
+  font-family: "Geist Mono", monospace; font-size: 10px; font-weight: 600;
+  letter-spacing: 0; color: var(--on-surface-variant);
+  background: var(--surface-high); border-radius: var(--radius-pill); padding: 1px 7px;
 }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav a {
   position: relative; display: flex; align-items: center; gap: var(--sp-3);
-  padding: 9px var(--sp-3); border-radius: var(--radius);
+  padding: 6px var(--sp-3); border-radius: var(--radius);
   color: var(--on-surface-variant); font-size: 13px; font-weight: 500;
   letter-spacing: 0; text-decoration: none; cursor: pointer;
   transition: background .15s, color .15s;
@@ -242,8 +252,8 @@ body {
 .nav a.navbuilder.active { background: var(--tertiary-soft); color: var(--tertiary); }
 .nav a.navbuilder.active::before { background: var(--tertiary); }
 
-.explorer { flex: 1; display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0;
-  border-top: 1px solid var(--outline-variant); padding-top: var(--sp-4); }
+.explorer { flex: 1; display: flex; flex-direction: column; gap: 6px; min-height: 0;
+  border-top: 1px solid var(--outline-variant); padding-top: var(--sp-3); }
 
 .searchwrap { position: relative; }
 .searchwrap .material-symbols-outlined {
@@ -253,7 +263,7 @@ body {
 .search {
   width: 100%; background: var(--surface-low); color: var(--on-surface);
   border: 1px solid var(--outline-variant); border-radius: var(--radius);
-  padding: 9px var(--sp-3) 9px 34px; font-size: 13px; font-family: inherit;
+  padding: 7px var(--sp-3) 7px 34px; font-size: 13px; font-family: inherit;
   transition: border-color .15s, box-shadow .15s;
 }
 .search::placeholder { color: var(--outline); }
@@ -279,19 +289,23 @@ body {
 .sort {
   width: 100%; background: var(--surface-low); color: var(--on-surface-variant);
   border: 1px solid var(--outline-variant); border-radius: var(--radius);
-  padding: 8px var(--sp-3); font-size: 12px; font-family: inherit; cursor: pointer;
+  padding: 6px var(--sp-3); font-size: 12px; font-family: inherit; cursor: pointer;
   transition: border-color .15s, color .15s;
 }
 .sort:hover { border-color: var(--outline-strong); color: var(--on-surface); }
 .sort:focus { outline: none; border-color: var(--primary); box-shadow: var(--ring); }
 .sort:focus-visible { outline: none; }
 
-.list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-2);
-  margin: var(--sp-1) -4px 0; padding: 0 4px 4px; }
+/* The rail is height-constrained, so the list must never be squeezed down to a
+   card or two: it holds a floor of ~5 rows and the rail scrolls if the viewport
+   is too short to grant it. */
+.list { flex: 1; min-height: 280px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 5px;
+  margin: 2px -4px 0; padding: 0 4px 4px; }
 
 .prow {
   background: var(--surface); border: 1px solid var(--outline-variant);
-  border-radius: var(--radius); padding: var(--sp-3); cursor: pointer;
+  border-radius: var(--radius); padding: 8px 10px; cursor: pointer;
   transition: border-color .15s, background .15s, transform .15s;
 }
 .prow:hover { background: var(--surface-high); border-color: var(--outline-strong); }
@@ -310,13 +324,18 @@ body {
   padding: 1px 6px; border-radius: var(--radius-pill); margin-left: 2px;
   color: var(--primary); background: var(--primary-soft); border: 1px solid var(--primary-border);
 }
-.prow .meta { font-size: 11px; color: var(--outline); margin-top: 6px; font-variant-numeric: tabular-nums; }
-.prow .worse {
-  display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500;
-  color: var(--tertiary); margin-top: var(--sp-2); padding-top: var(--sp-2);
-  border-top: 1px solid var(--outline-variant);
+.prow .meta {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  font-size: 11px; color: var(--outline); margin-top: 4px; font-variant-numeric: tabular-nums;
 }
-.prow .worse .material-symbols-outlined { font-size: 14px; }
+.prow .meta > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Worsening count rides the meta line as a pill instead of claiming a third row */
+.prow .worse {
+  display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;
+  font-size: 10px; font-weight: 700; color: var(--tertiary);
+  background: var(--tertiary-soft); border-radius: var(--radius-pill); padding: 1px 6px 1px 4px;
+}
+.prow .worse .material-symbols-outlined { font-size: 13px; }
 
 .chip {
   font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: var(--radius-pill);
@@ -327,9 +346,6 @@ body {
 .chip.High { background: var(--error-soft); color: var(--error); border-color: var(--error-border); }
 .chip.Medium { background: var(--tertiary-soft); color: var(--tertiary); border-color: var(--tertiary-border); }
 .chip.Low { background: var(--healthy-soft); color: var(--healthy); border-color: var(--healthy-border); }
-
-.railfoot { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-2);
-  border-top: 1px solid var(--outline-variant); }
 
 /* ───────────────────────── Main ───────────────────────── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
