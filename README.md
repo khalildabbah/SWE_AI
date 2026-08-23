@@ -1,19 +1,24 @@
-# SWE-AI: Early Detection of Patient Deterioration Using Laboratory Test Trends
+# 🏥 LabTrend
+## Early Detection of Patient Deterioration Using Laboratory Test Trends
 
-> A Software Engineering course project exploring how trends in routine laboratory tests can surface early signs of clinical deterioration in hospitalized patients.
+LabTrend is an academic software project designed to identify early signs of patient deterioration by analyzing changes in laboratory test results over time.
 
-**🔴 Live demo:** [deterioration-detector.onrender.com](https://deterioration-detector.onrender.com/)
-*(free Render instance — the first request after idle takes ~30–60s to wake up)*
+Instead of looking only at individual laboratory values, LabTrend follows the patient's laboratory history and analyzes how results change over time. The system uses trend analysis, explainable risk-scoring rules, early-warning alerts, and interactive visualizations to help identify possible deterioration.
 
 ---
 
-## 📌 Project Overview
+## 🌐 Project Resources
 
-Hospitalized patients often show measurable physiological changes in their laboratory results **hours before** a clinically obvious deterioration event. These early signals are frequently missed because clinicians review labs as isolated point-in-time values rather than as **trends over time**.
+- **Project Website:**  
+  https://sites.google.com/view/2026group5labtrend
 
-**SWE-AI** is a software system that ingests patient laboratory time-series data, analyzes how each patient's lab values evolve, and produces actionable outputs: abnormal trend detection, early-warning alerts, a per-patient risk score, and an interactive dashboard.
+- **User Manual:**  
+  https://drive.google.com/uc?export=download&id=1afWsu6GJUGGy7OMCGq5ov4ZuRHdxTqvh
 
-The goal is to demonstrate—through a working prototype—how trend-aware analysis of laboratory data can support earlier recognition of patient deterioration.
+- **Live Application:**  
+  https://deterioration-detector.onrender.com/
+
+> The live application is hosted on a free Render instance, so the first request after a period of inactivity may take some time to load.
 
 ---
 
@@ -23,352 +28,769 @@ The goal is to demonstrate—through a working prototype—how trend-aware analy
 
 ---
 
-## 🎯 Expected Artifact
+## 🎯 Project Goal
 
-A software system that receives patient laboratory time-series data from the **MIMIC-III `LABEVENTS`** table and returns:
+The goal of LabTrend is to transform repeated laboratory measurements into useful early-warning information.
 
-- **Abnormal lab trend detection** — identifies clinically meaningful changes in lab values over time.
-- **Early warning alerts** — flags patients whose trends suggest possible deterioration.
-- **Risk score per patient** — a quantitative score summarizing each patient's deterioration risk.
-- **Early-warning lead time** — quantifies *how many hours ahead* the trend signal fires before the first abnormal flag.
-- **Clinical syndrome detection** — recognizes multi-lab patterns (e.g. kidney, metabolic) rather than treating each lab in isolation.
-- **Cited scoring rule book** — a transparent, source-referenced explanation of exactly how every score is decided.
-- **Dashboard visualization** — an interactive view of trends, alerts, and scores.
+Many systems and clinical workflows focus on individual laboratory values. However, a value may become more meaningful when we also examine how it has changed over time.
 
----
+LabTrend was developed to:
 
-## 🗂️ Dataset Description
+- Analyze laboratory results over time.
+- Detect abnormal laboratory values.
+- Identify worsening laboratory trends.
+- Calculate an explainable patient risk score.
+- Classify patients as Low, Medium, or High risk.
+- Generate early-warning alerts.
+- Detect patterns across multiple laboratory tests.
+- Present patient information through an interactive dashboard.
+- Allow researchers to define and test additional clinical patterns.
 
-This project uses the **MIMIC-III** clinical database, specifically the `LABEVENTS` table, which records laboratory measurements for patients.
-
-### Main Input Fields
-
-| Field         | Description                                                        |
-|---------------|--------------------------------------------------------------------|
-| `SUBJECT_ID`  | Unique identifier for an individual patient.                       |
-| `HADM_ID`     | Unique identifier for a hospital admission.                        |
-| `ITEMID`      | Identifier for the specific laboratory test/measurement.           |
-| `CHARTTIME`   | Timestamp when the measurement was recorded.                       |
-| `VALUENUM`    | Numeric value of the laboratory measurement.                       |
-
-### Scale (full dataset)
-
-The full `LABEVENTS` dump is **~1.8 GB / 27.8M rows**. After filtering to the 8 core labs and cleaning, the system works over:
-
-| Metric | Value |
-|--------|-------|
-| Raw rows streamed | **27,854,055** |
-| Clean measurements kept | **4,615,515** |
-| Distinct patients | **45,411** |
-| Hospital admissions | **57,238** |
-| Core labs tracked | **8** |
-
-> **Note on data access:** MIMIC-III is a restricted-access dataset. Use of the data requires completion of the required training and a signed data use agreement via [PhysioNet](https://physionet.org/content/mimiciii/). **No real patient data is included in this repository.** For convenience, a ~90 MB **fully synthetic** sample (`deterioration-detector/data/sample/LABEVENTS_sample.csv`) is bundled so the system runs end-to-end on a fresh clone with no download — see [Running the Prototype](#-running-the-prototype).
+A major goal of the project is **explainability**. The system does not simply produce a risk category; it also provides information about the laboratory values, trends, and rules that contributed to that result.
 
 ---
 
-## 🏗️ System Architecture
+# 🗂️ Dataset
 
+LabTrend uses data based on the **MIMIC-III** critical-care research database, mainly the `LABEVENTS` table.
+
+The LABEVENTS table contains laboratory measurements collected during hospital admissions.
+
+Important fields include:
+
+| Field | Description |
+|---|---|
+| `SUBJECT_ID` | Unique patient identifier |
+| `HADM_ID` | Hospital admission identifier |
+| `ITEMID` | Laboratory test identifier |
+| `CHARTTIME` | Time when the measurement was recorded |
+| `VALUENUM` | Numeric laboratory result |
+
+### Dataset Scale
+
+The original LABEVENTS dataset contains approximately:
+
+- **27.8 million** laboratory records
+- **45,000+** patients
+- **57,000+** hospital admissions
+
+LabTrend focuses on **8 core laboratory tests**.
+
+After filtering and cleaning the original data, approximately **4.6 million clean laboratory measurements** remain for analysis.
+
+### MIMIC-III Access
+
+MIMIC-III is a restricted-access research dataset and the original patient data cannot be distributed publicly with this repository.
+
+For this reason, the repository also includes **synthetic sample data** that allows the main system workflow to be demonstrated without providing restricted patient data.
+
+---
+
+# 🧹 Data Cleaning and Preprocessing
+
+Before the system analyzes patients, the laboratory data goes through a cleaning and preparation process.
+
+We started with approximately **27.8 million laboratory test records** from MIMIC-III.
+
+The preprocessing pipeline:
+
+1. Reads the large LABEVENTS dataset using DuckDB.
+2. Filters the dataset to the 8 core laboratory tests used by LabTrend.
+3. Removes non-numeric values.
+4. Removes missing or implausible measurements.
+5. Removes unnecessary or duplicate information where applicable.
+6. Organizes measurements by patient, hospital admission, and time.
+7. Stores the processed information in DuckDB.
+
+After preprocessing, approximately **4.6 million clean measurements** remain.
+
+Organizing the data by patient and time is especially important because LabTrend does not only examine the patient's latest laboratory value. It also examines previous measurements to understand how the value is changing over time.
+
+---
+
+# 🏗️ System Architecture
+
+LabTrend follows a pipeline architecture.
+
+```text
+        MIMIC-III LABEVENTS
+                 │
+                 ▼
+     Data Ingestion & Cleaning
+                 │
+                 ▼
+        DuckDB / MotherDuck
+                 │
+                 ▼
+   Trend & Abnormality Analysis
+                 │
+                 ▼
+     Risk Scoring & Patterns
+                 │
+                 ▼
+       Early-Warning Alerts
+                 │
+                 ▼
+              FastAPI
+                 │
+                 ▼
+        React + Vite Dashboard
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MIMIC-III LABEVENTS                        │
-│        (SUBJECT_ID, HADM_ID, ITEMID, CHARTTIME, VALUENUM)         │
-└───────────────────────────────┬───────────────────────────────────┘
-                                │
-                                ▼
-                  ┌──────────────────────────┐
-                  │   1. Data Ingestion &     │
-                  │      Preprocessing        │
-                  │  (clean, filter, resample)│
-                  └────────────┬──────────────┘
-                                │  patient lab time-series
-                                ▼
-                  ┌──────────────────────────┐        ┌──────────────────────┐
-                  │   Storage layer           │ ─────▶ │  MotherDuck (cloud)   │
-                  │  (DuckDB / MotherDuck)    │        │   full dataset, 10GB  │
-                  └────────────┬──────────────┘        │   free tier           │
-                                │                       └──────────────────────┘
-                                ▼   (local labs.duckdb fallback)
-                  ┌──────────────────────────┐
-                  │   2. Trend Analysis &     │
-                  │     Abnormality Detection │
-                  └────────────┬──────────────┘
-                                │  detected trends / anomalies
-                                ▼
-                  ┌──────────────────────────┐
-                  │   3. Risk Scoring,        │
-                  │   Trajectory, Syndromes,  │
-                  │   Lead-Time & Alerts      │
-                  └────────────┬──────────────┘
-                                │  risk scores + alerts + evaluation
-                                ▼
-                  ┌──────────────────────────┐
-                  │   4. Dashboard &          │
-                  │      Visualization        │
-                  │   (FastAPI + React)       │
-                  └──────────────────────────┘
+
+## Main Architecture Components
+
+### 1. Data Ingestion & Preprocessing
+
+This component reads the laboratory dataset and prepares it for analysis.
+
+DuckDB allows the system to process the large LABEVENTS dataset without loading the entire file into memory.
+
+The component filters the data, cleans invalid measurements, and creates an organized analytical dataset.
+
+---
+
+### 2. Storage Layer
+
+LabTrend supports:
+
+- **DuckDB** for local data storage.
+- **MotherDuck** for cloud-hosted DuckDB storage.
+
+This allows the same analysis logic to work with either a local database or a cloud-hosted dataset.
+
+---
+
+### 3. Trend Analysis
+
+The Trend Analysis component examines how laboratory values change over time.
+
+Instead of asking only:
+
+> Is this laboratory value abnormal?
+
+LabTrend can also examine:
+
+> Is this laboratory value getting better, remaining stable, or getting worse?
+
+This provides additional information about the patient's trajectory.
+
+---
+
+### 4. Abnormality Detection
+
+Laboratory values are compared with predefined reference ranges.
+
+Measurements can be classified according to their relationship with the expected range.
+
+This information is then used by the scoring and alerting components.
+
+---
+
+### 5. Risk Scoring
+
+The Risk Scoring component combines information from multiple laboratory tests to calculate a patient risk score.
+
+The score considers:
+
+- Abnormal laboratory measurements.
+- Critically abnormal measurements.
+- Worsening laboratory trends.
+- Multiple abnormal laboratory tests occurring together.
+
+The result is translated into an understandable risk category.
+
+---
+
+### 6. Backend API
+
+The backend is implemented using **FastAPI**.
+
+It connects the data and analysis components with the frontend and provides the information required by the dashboard.
+
+---
+
+### 7. Dashboard
+
+The frontend is built using **React and Vite**.
+
+Recharts is used to visualize laboratory values, risk trajectories, and other patient information.
+
+---
+
+# ✨ Main Features
+
+## 🧑‍⚕️ Patient Monitoring Dashboard
+
+The Patient Monitoring Dashboard provides an overview of patient admissions and their calculated risk levels.
+
+Patients can be filtered according to:
+
+- 🟢 Low Risk
+- 🟡 Medium Risk
+- 🔴 High Risk
+
+For each patient, the system can display:
+
+- Current risk score
+- Risk category
+- Laboratory measurements
+- Laboratory history
+- Abnormal measurements
+- Laboratory trends
+- Early-warning alerts
+- Risk trajectory
+- Detected clinical patterns
+
+This allows the user to move from a general overview of patients to a more detailed view of a specific patient's condition.
+
+---
+
+# 📈 Laboratory Trend Analysis
+
+One of the main ideas behind LabTrend is that laboratory values should not always be viewed as isolated measurements.
+
+For example, two patients may currently have similar laboratory values, but one patient's value may be stable while the other patient's value has been continuously worsening.
+
+LabTrend therefore organizes measurements as time-series data and analyzes how each laboratory result changes over time.
+
+The dashboard presents these changes visually so that the patient's laboratory trajectory is easier to understand.
+
+---
+
+# ⚠️ Early-Warning Alerts
+
+LabTrend generates alerts based on abnormal laboratory values and worsening trends.
+
+The purpose of these alerts is to highlight information that may require attention.
+
+Instead of simply displaying that a laboratory measurement is abnormal, the system can also indicate that an already abnormal measurement is continuing to move in an unfavorable direction.
+
+---
+
+# 🎯 Explainable Risk Scoring
+
+LabTrend uses a **rule-based scoring system**.
+
+This was an important design decision because we wanted the system's output to remain understandable rather than relying only on a black-box prediction.
+
+Each laboratory measurement can contribute to the patient's overall score.
+
+The scoring logic considers:
+
+- Whether the measurement is normal.
+- Whether it is outside the reference range.
+- How far it is outside the range.
+- Whether the laboratory value is worsening over time.
+
+The default risk categories are:
+
+| Score | Risk Level |
+|---:|---|
+| **0–2** | 🟢 Low Risk |
+| **3–5** | 🟡 Medium Risk |
+| **6+** | 🔴 High Risk |
+
+The user can therefore inspect the underlying laboratory information and understand why the patient received a particular risk category.
+
+---
+
+# 📖 Scoring Rule Book
+
+The **Scoring Rule Book** is an important explainability feature in LabTrend.
+
+It explains how the risk-scoring engine works and helps users understand how the system reaches its results.
+
+The Rule Book includes:
+
+### Laboratory Reference Ranges
+
+It displays the reference range used for each of the 8 core laboratory tests.
+
+### Value Classification
+
+It explains how measurements are classified according to their relationship with the reference range.
+
+For example:
+
+- Normal
+- Abnormal
+- Critical
+
+### Score Calculation
+
+It explains how points are assigned to abnormal values and worsening trends.
+
+### Risk Categories
+
+It explains how the total score becomes:
+
+- Low Risk
+- Medium Risk
+- High Risk
+
+### Clinical Patterns
+
+It also describes the multi-laboratory patterns used by the system.
+
+### Sources
+
+The scoring rules and reference information can be connected with supporting medical references.
+
+An important design decision is that the Rule Book is generated from the same constants used by the actual scoring engine.
+
+This helps prevent a situation where the documentation says one thing while the code performs a different calculation.
+
+---
+
+# 📉 Risk Trajectory
+
+LabTrend does not only calculate the patient's latest risk score.
+
+The system can recalculate risk at different points during the patient's hospital stay.
+
+This creates a **risk trajectory** that shows how the calculated risk changes over time.
+
+The trajectory can help identify whether the patient's calculated risk is:
+
+- Increasing
+- Decreasing
+- Remaining relatively stable
+
+This provides more context than viewing only one final risk score.
+
+---
+
+# 🧩 Clinical Pattern Detection
+
+Some medical situations involve changes across multiple laboratory tests rather than one isolated measurement.
+
+LabTrend therefore supports multi-laboratory pattern detection.
+
+The system can examine combinations of laboratory abnormalities and trends and identify when a defined pattern appears in the patient's data.
+
+These patterns can then be displayed together with the patient's risk and laboratory information.
+
+---
+
+# 🛠️ Pattern Builder
+
+The **Pattern Builder** allows the system to go beyond its predefined clinical patterns.
+
+Researchers can create their own laboratory-based pattern and test it against the available patient data.
+
+The basic workflow is:
+
+### Step 1 — Define a Pattern
+
+The user chooses a disease, syndrome, or laboratory pattern they want to investigate.
+
+### Step 2 — Select Laboratory Rules
+
+The user can select relevant laboratory tests and define:
+
+- Expected direction
+- Thresholds
+- Explanation
+- Supporting evidence
+- References
+
+### Step 3 — AI-Assisted Research
+
+The Pattern Builder can use the **OpenAI API** as an AI co-research assistant.
+
+The AI can help investigate possible laboratory relationships and suggest relevant rules and sources.
+
+The user remains responsible for reviewing the suggestions.
+
+### Step 4 — Run the Pattern
+
+The pattern can be tested against the available patient cohort.
+
+The system then identifies admissions that match the defined rules.
+
+### Step 5 — Save the Pattern
+
+Saved patterns can be reused and displayed together with the built-in patterns.
+
+---
+
+# 🔄 Custom Pattern Risk Scoring
+
+A pattern created using the Pattern Builder can also be used as an alternative scoring model.
+
+The default LabTrend score answers a general question:
+
+> **How abnormal does this patient's laboratory profile currently appear?**
+
+A custom pattern can answer a more specific research question:
+
+> **How strongly does this patient's laboratory history match this particular pattern?**
+
+When a custom pattern is selected, the system can use its rules when calculating:
+
+- Risk score
+- Risk category
+- Alerts
+- Risk trajectory
+- Patient ranking
+
+This makes LabTrend more flexible for research and experimentation.
+
+---
+
+# 📊 Detector Evaluation
+
+LabTrend includes functionality for evaluating its abnormality detector.
+
+The detector can be compared with the abnormal `FLAG` information available in MIMIC-III.
+
+The evaluation can include measurements such as:
+
+- Accuracy
+- Precision
+- Recall
+- Specificity
+- F1 Score
+
+These measurements help us understand how closely the system's abnormality classification agrees with the available reference information.
+
+This evaluation represents **technical evaluation of the prototype** and should not be interpreted as clinical validation.
+
+---
+
+# ⏱️ Early-Warning Lead-Time Analysis
+
+An important part of the research question is whether analyzing trends can provide information earlier than looking only at individual abnormal measurements.
+
+LabTrend therefore includes **lead-time analysis**.
+
+The system can examine the time difference between a trend-based warning and a later abnormal reference event.
+
+This allows us to investigate whether changes over time can provide earlier warning signals.
+
+---
+
+# 🤖 AI Assistance
+
+AI is used as an additional research and interaction component in LabTrend.
+
+The OpenAI API supports functionality such as:
+
+- Dataset-related question answering.
+- Research assistance in the Pattern Builder.
+- Suggestions for possible laboratory rules.
+- Assistance with investigating clinical patterns.
+
+The main patient risk score itself remains based on transparent rules rather than being generated directly by the language model.
+
+This separation helps keep the main risk calculation explainable.
+
+---
+
+# 🧪 Add, Delete and Export Patient Features
+
+The system also includes patient-management functionality developed as part of the software engineering process.
+
+### Add Patient
+
+Allows a user to add patient information for testing and demonstration purposes.
+
+### Delete Patient
+
+Allows user-created patient records to be removed from the system.
+
+### Export Patient Report
+
+Allows patient information and analysis results to be exported into a report.
+
+These features were also useful during development for testing complete user workflows beyond the core analysis pipeline.
+
+---
+
+# 🛠️ Technologies
+
+## Data & Analysis
+
+- **Python** — main programming language.
+- **DuckDB** — efficient processing of the large laboratory dataset.
+- **pandas** — data manipulation and analysis.
+- **Pydantic** — data validation.
+
+## Backend
+
+- **FastAPI** — REST API.
+- **Uvicorn** — API server.
+- **MotherDuck** — cloud-hosted DuckDB storage.
+
+## Artificial Intelligence
+
+- **OpenAI API** — dataset Q&A and AI-assisted research in the Pattern Builder.
+
+## Frontend
+
+- **React** — interactive user interface.
+- **Vite** — frontend development and build environment.
+- **Recharts** — laboratory and risk visualizations.
+
+## Deployment
+
+- **Docker** — application containerization.
+- **Render** — application hosting.
+
+## Testing & Development
+
+- **pytest** — automated Python tests.
+- **GitHub Actions** — continuous integration.
+- **Git & GitHub** — source control and collaboration.
+
+---
+
+# 📊 System Evaluation Procedure
+
+LabTrend was evaluated in several stages.
+
+First, we tested the data-processing pipeline to make sure that laboratory measurements were correctly cleaned, filtered, and organized by patient and time.
+
+We then tested the deterioration detection and risk-scoring rules on the processed data and checked whether the system correctly identified abnormal laboratory values and worsening trends.
+
+We also evaluated the complete system workflow, from loading patient data to displaying risk scores, alerts, laboratory trends, and patient information in the dashboard.
+
+The main system features were tested to make sure they worked correctly and consistently.
+
+The abnormality detector was also compared with the abnormal `FLAG` information available in MIMIC-III.
+
+As an additional evaluation, we presented LabTrend to a medical doctor and asked for feedback about:
+
+- The project idea
+- User interface
+- Presentation of patient information
+- Data reliability
+- Possible clinical use
+
+The feedback helped us identify both strengths of the system and areas that require further research and validation.
+
+---
+
+# 📋 Evaluation Results
+
+The evaluation showed that LabTrend can process laboratory data, analyze changes over time, calculate explainable risk scores, and present the results through an interactive dashboard.
+
+The system was able to identify abnormal laboratory values and worsening trends according to the rules defined in the analysis engine.
+
+The complete workflow — from data processing to API communication and dashboard visualization — was also tested.
+
+Initial feedback from a medical doctor was positive regarding the idea and the interface.
+
+An important limitation raised during the feedback was that the reliability of the analysis depends on the amount and quality of laboratory information available for each patient.
+
+Different medical users may also require different levels of information.
+
+For example:
+
+- Emergency-room staff may prefer a quick overview of the patient's condition and the most important alerts.
+- Other healthcare professionals may want to explore detailed laboratory results, trends, and risk factors.
+
+The current evaluation should be considered a **technical and academic evaluation**, not a clinical validation.
+
+---
+
+# 🚀 Running the Project
+
+## Requirements
+
+Before running LabTrend, make sure you have:
+
+- Python 3
+- Node.js
+- npm
+- Git
+
+---
+
+## 1. Clone the Repository
+
+```bash
+git clone <REPOSITORY-URL>
+cd 2026_5_labtrend/deterioration-detector
 ```
 
-The system follows a **pipeline architecture**: data flows from ingestion through analysis and scoring, ending in a visualization layer. A single **storage layer** ([`src/storage/db.py`](deterioration-detector/src/storage/db.py)) is the only thing that touches the database, so the same code runs against the local DuckDB file or the hosted MotherDuck database depending on configuration.
+Replace `<REPOSITORY-URL>` with the final GitHub repository URL.
 
 ---
 
-## 🧩 Main Components
+## 2. Backend — Terminal 1
 
-1. **Data Ingestion & Preprocessing** — streams `LABEVENTS` with DuckDB (no full RAM load), filters to the 8 core labs, drops non-numeric and implausible values, dedupes, and builds a compact analytical database.
-2. **Trend Analysis & Abnormality Detection** — computes how each lab evolves over time and classifies values against reference ranges ([`trends.py`](deterioration-detector/src/analysis/trends.py), [`abnormal.py`](deterioration-detector/src/analysis/abnormal.py)).
-3. **Risk Scoring, Trajectory & Alerts** — aggregates trends into a per-patient risk score, recomputes it at each timestamp to plot a **risk trajectory**, and emits early-warning **alerts** ([`risk_score.py`](deterioration-detector/src/analysis/risk_score.py), [`trajectory.py`](deterioration-detector/src/analysis/trajectory.py), [`alerts.py`](deterioration-detector/src/analysis/alerts.py)).
-4. **Syndrome Detection** — recognizes multi-lab patterns (kidney, metabolic, etc.) rather than treating each lab independently ([`syndromes.py`](deterioration-detector/src/analysis/syndromes.py)).
-5. **Lead-Time Analysis** — quantifies how many hours *ahead* the trend signal fires versus MIMIC's own abnormal `FLAG` — the scientific core of the project ([`lead_time.py`](deterioration-detector/src/analysis/lead_time.py)).
-6. **Detector Evaluation** — scores our anomaly detector against MIMIC's `FLAG` column as ground truth ([`evaluation.py`](deterioration-detector/src/analysis/evaluation.py)).
-7. **Scoring Rule Book** — a transparent, source-cited summary of how every score is decided, assembled *live* from the scoring engine's own constants so it can never drift from the code ([`rules.py`](deterioration-detector/src/analysis/rules.py)).
-8. **Pattern Builder** — lets a researcher name a candidate syndrome and agree, with an AI co-worker that searches live literature, on a set of **cited** lab rules. A saved pattern is evaluated on every patient alongside the built-in syndromes, and can **replace the hardcoded risk score** so the whole dashboard ranks and scores by that syndrome instead ([`custom_syndromes.py`](deterioration-detector/src/analysis/custom_syndromes.py), [`builder.py`](deterioration-detector/src/api/builder.py), [`pattern_risk.py`](deterioration-detector/src/storage/pattern_risk.py)).
-9. **Dashboard & API** — FastAPI serves the analysis over a JSON API and hosts the React dashboard.
-
----
-
-## 🗄️ Data & Hosting
-
-Because the full dataset is far larger than GitHub's 100 MB file limit, the database is **not** stored in git. Instead the storage layer resolves a connection in this order:
-
-1. **MotherDuck (cloud)** — if `MOTHERDUCK_TOKEN` is set, the app connects to the hosted `labs` database (cloud DuckDB). This holds the **full 4.6M-row dataset** and is what the live Render deployment uses. The free tier gives 10 GB storage / 10 GB monthly compute.
-2. **Local DuckDB file** — otherwise it falls back to `data/processed/labs.duckdb`, the file produced by `build_db.py` on your machine.
-3. **Bundled sample** — if neither the real CSV nor a built DB is present, `build_db.py` ingests the bundled ~90 MB synthetic sample, so a fresh clone still runs end-to-end.
-
-### Uploading the full dataset to MotherDuck
-
-After building the database locally, push it to the cloud so every clone shares the real data:
+Move into the backend folder:
 
 ```bash
 cd deterioration-detector
-export MOTHERDUCK_TOKEN="<token from MotherDuck UI → Settings → Access Tokens>"
-.venv/bin/python scripts/upload_to_motherduck.py   # pushes every table to the cloud "labs" db
 ```
 
-The script is safe to re-run (each table is replaced from the local copy) and prints per-table row counts.
-
-### Configuring the token
-
-The token is a **secret** and is never committed. Set it via a gitignored `.env` file (auto-loaded by the app):
+Create a Python virtual environment:
 
 ```bash
-cp .env.example .env
-# then edit .env and paste your token:
-#   MOTHERDUCK_TOKEN=...
+py -m venv .venv
 ```
 
-> ⚠️ **Token expiry:** access tokens can be time-limited. If `/api/stats` suddenly reports small numbers, the token has expired and the app has silently fallen back to the sample — create a new token, then update it both in `.env` and in the Render dashboard's environment variables.
-
-### Verifying which dataset is live
-
-`/api/stats` reports the row/patient/admission counts — the fingerprint that distinguishes the real dataset from the sample:
+Activate it on Windows:
 
 ```bash
-curl -s https://deterioration-detector.onrender.com/api/stats | python3 -m json.tool
+.venv\Scripts\activate
 ```
 
-`admissions: 57238` (and `kept_rows: 4615515`) confirms the **full cloud dataset** is being served; small numbers mean the sample fallback is in use.
-
----
-
-## 🛠️ Technology Stack
-
-| Layer                  | Technology                                   |
-|------------------------|----------------------------------------------|
-| Language               | Python 3                                     |
-| Ingestion / storage    | **DuckDB 1.5.3** (streams the 1.8 GB CSV, no full RAM load) |
-| Hosted database        | **MotherDuck** (cloud DuckDB, free tier — full dataset) |
-| Config                 | **python-dotenv** (`.env` for secrets)       |
-| Analysis engine        | Pure Python (`src/analysis`), unit-tested with **pytest** |
-| API                    | **FastAPI** + uvicorn                        |
-| Dashboard / UI         | **React** (Vite) + **Recharts**              |
-| Packaging / deploy     | **Docker** (multi-stage) + **Render** (`render.yaml` blueprint) |
-| Version control / CI   | Git & GitHub + GitHub Actions                |
-
-> DuckDB is pinned to **1.5.3** because MotherDuck does not yet support 1.5.4.
-
----
-
-## 🚀 Running the Prototype
-
-The working prototype lives in [`deterioration-detector/`](deterioration-detector/)
-(full details in its [README](deterioration-detector/README.md)). It runs on a fresh
-clone with **no MIMIC download** — `build_db.py` auto-falls back to the bundled
-synthetic sample when the real dataset is absent.
+If `py` is not recognized, use:
 
 ```bash
-cd deterioration-detector
-python3 -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+```
+
+Install Python dependencies:
+
+```bash
 pip install -r requirements.txt
-
-python scripts/build_db.py      # M1+M2: builds clean labs.duckdb (uses sample if no real CSV)
-python scripts/build_risk.py    # M3-M6: scores every admission
-uvicorn src.api.main:app --reload   # API on http://localhost:8000
-
-# in a second terminal, for the dashboard:
-cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
 
-**To run against the full cloud dataset instead of building locally**, set your
-`MOTHERDUCK_TOKEN` (see [Data & Hosting](#-data--hosting)) — `build_risk.py` and the API
-will read from MotherDuck automatically, no local build required.
-
-> **You only see data after the build steps run (or a token is set)** — the database
-> itself is not committed (it's generated). Drop the real `data/raw/LABEVENTS.csv` in
-> place first to build against MIMIC-III instead of the synthetic sample.
-
-### Running with Docker
-
-The repo ships a multi-stage `Dockerfile` (FastAPI serves the built React dashboard and the `/api` routes from one image):
+Build the database:
 
 ```bash
-docker build -t deterioration-detector .
-docker run -p 8000:8000 -e MOTHERDUCK_TOKEN="<token>" deterioration-detector
+python scripts/build_db.py
 ```
 
-### Deploying to Render
+Build the risk data:
 
-[`render.yaml`](render.yaml) is a Render Blueprint — connect the repo to Render and it deploys the Docker image as a free web service (health check on `/api/stats`, auto-deploy on push). Add `MOTHERDUCK_TOKEN` as an environment variable in the Render dashboard so the deployment reads the full cloud dataset.
+```bash
+python scripts/build_risk.py
+```
 
----
+Start the FastAPI backend:
 
-## 🔌 API Endpoints
+```bash
+uvicorn src.api.main:app --reload --port 8000
+```
 
-| Endpoint | Returns |
-|----------|---------|
-| `GET /api/stats` | Pipeline scale stats + risk distribution (also the health check). |
-| `GET /api/evaluation` | Detector-vs-MIMIC-`FLAG` accuracy, overall and per-lab. |
-| `GET /api/lead-time` | How many hours ahead the trend signal fires before the first abnormal flag. |
-| `GET /api/rules` | The cited scoring rule book: reference ranges, classification bands, point math, risk categories, and syndrome definitions, each tagged with a published source. |
-| `GET /api/admissions` | Triage list of admissions ranked by risk (filterable by category). `?pattern=<key>` ranks by a user-built pattern instead of the built-in score. |
-| `GET /api/admissions/{subject_id}/{hadm_id}` | Full detail for one admission: labs over time, trajectory, alerts, syndromes — built-in **and** any saved Pattern Builder pattern that matches. `?pattern=<key>` scores the whole response by that pattern. |
-| `GET /api/builder/labs` · `/catalog` | The 8 testable labs, and the full ~700-lab catalog behind the pick-list. |
-| `GET·POST /api/builder/syndromes` · `DELETE /{key}` | List, save and delete user-built patterns. |
-| `GET /api/builder/export` · `POST /api/builder/import` | Download every saved pattern as JSON, and restore one. |
-| `POST /api/builder/research` | One AI co-research turn: live web search → prose reply plus cited rule proposals. |
-| `POST /api/builder/run` | Apply a rule set across the whole cohort and report which admissions match. |
-| `POST /api/builder/syndromes/{key}/rank` | Rebuild the cached cohort ranking for one pattern (also runs automatically on save). |
+The backend will be available at:
+
+```text
+http://localhost:8000
+```
+
+Leave this terminal running.
 
 ---
 
-## 🖥️ Using the Dashboard
+## 3. Frontend — Terminal 2
 
-- **Opens ready to read.** The dashboard auto-selects the highest-risk patient on load, so the detail pane is never empty — no "pick a patient" dead end.
-- **Triage board (left).** Admissions are ranked by risk score. Use the **High / Medium / Low / All** filter to switch cohorts; the top patient of each cohort loads automatically.
-- **Built-in glossary — hover anything.** Because this audience isn't clinical, every term explains itself on hover: lab names, the risk score, the High/Medium/Low badges, the `critical` / `worsening` counts, and the pipeline stats. A **dotted underline** marks anything you can hover.
-- **Detail pane (right), top to bottom:** the overall **risk score + category**, the **risk trajectory** across the stay, auto-generated **early-warning alerts**, and each **lab plotted over time** with a green band marking the normal range.
+Open another terminal.
 
-### The 8 core labs (plain English)
+Move to the frontend directory:
 
-| Lab | Normal range | What it tells you |
-|-----|--------------|-------------------|
-| Creatinine | 0.6–1.2 mg/dL | Kidney waste product; rising = kidneys not filtering well. |
-| Urea Nitrogen (BUN) | 7–20 mg/dL | Protein-breakdown waste; high = kidney stress or dehydration. |
-| Potassium | 3.5–5.0 mEq/L | Heart/muscle electrolyte; too high or low risks dangerous heart rhythms. |
-| Sodium | 135–145 mEq/L | Controls water balance; abnormal levels affect brain and nerves. |
-| Bicarbonate | 22–29 mEq/L | Blood acid balance; low = blood turning too acidic (distress). |
-| White Blood Cells | 4–11 K/µL | Infection-fighting cells; high signals infection, very low weakens immunity. |
-| Hematocrit | 36–48 % | Share of blood that is red cells; low = anemia/blood loss. |
-| Lactate | 0.5–2.0 mmol/L | Builds up when tissues lack oxygen; rising = key warning of shock. |
+```bash
+cd deterioration-detector/frontend
+```
 
-> Reference ranges are generic adult values from [`lab_dictionary.py`](deterioration-detector/src/ingestion/lab_dictionary.py), for this educational prototype only — **not** clinical advice.
+Install frontend dependencies:
 
-### 📖 Scoring Rule Book
+```bash
+npm install
+```
 
-The **Scoring Rule Book** tab is the dashboard's "show your work" page. Because this team isn't clinical, it makes every number in the app traceable — nothing is a black box. It walks through, in plain language:
+Start the Vite development server:
 
-1. **Reference ranges** — the normal range for each of the 8 labs and which direction signals deterioration.
-2. **Classifying a value** — inside the range = *normal* (0 pts); just outside = *abnormal* (+1); more than half the range-width beyond = *critical* (+2).
-3. **Building the score** — sum every lab's points, plus +1 if a lab is trending the wrong way *while already* out of range.
-4. **Risk categories** — total **0–2 = Low**, **3–5 = Medium**, **6+ = High**.
-5. **Clinical syndromes** — the named multi-lab patterns and how many signals must line up for each to fire.
-6. **Sources** — every rule is tagged with a published reference (NEJM laboratory reference values, KDIGO, Sepsis-3, NEWS2). The parts that are this prototype's own scaling choices are honestly labelled *"engine heuristic,"* not attributed to a guideline.
+```bash
+npm run dev
+```
 
-The page is served by [`GET /api/rules`](#-api-endpoints), assembled **live from the scoring engine's own constants** ([`rules.py`](deterioration-detector/src/analysis/rules.py)) — so what you read can never drift from the code that actually scores patients.
+The frontend will normally be available at:
 
-### 🛠️ Pattern Builder
+```text
+http://localhost:5173
+```
 
-The other tabs show patterns *we* defined. The **Pattern Builder** tab lets you define your own, in three steps:
-
-1. **Choose a disease or syndrome** — anything you want to investigate.
-2. **Co-research it with the AI** — the co-pilot searches real literature through OpenAI's hosted `web_search` tool and proposes rules, each one lab moving in one direction, with a plain rationale, a citation, and the numeric cut-off the source states where there is one. It summarises what each source *says* directly in the chat, so you can judge a proposal without opening the link. A search takes up to a minute and can be cancelled or retried.
-3. **Review the rule set** — add rules by hand from a searchable catalog of ~700 labs, edit any rule's direction, rationale, evidence or citation, set how many rules must fire, then **run it across all 8,304 admissions**. Click any result to jump straight to that patient.
-
-Three things make a saved pattern real rather than a toy:
-
-- **It is applied to every patient.** A saved pattern is evaluated on each admission alongside the built-in syndromes and appears on the Patient Monitoring page as a card marked **Custom**, carrying its citations.
-- **It can drive the scoring.** See below — this is the point of the tab.
-- **It is honest about what it tested.** Only the 8 tracked labs exist in this dataset. A rule over any other lab is kept as *research-only*: saved, cited and displayed, but never counted as a match — the pattern card and the cohort run both say so explicitly.
-
-#### What "High" means — and how to change it
-
-Every rule shows the value it actually fires at, next to the rule itself: `Creatinine ↑ High  > 1.2 mg/dL`.
-
-By default that is the edge of the lab's normal reference range, which is usually **far looser than a diagnostic criterion**. The consensus definition of hepatorenal syndrome asks for creatinine **> 1.5 mg/dL**, but a plain "high" rule fires from 1.2 — so it matches many patients with ordinary renal impairment and no liver disease at all.
-
-So a rule can carry **its own threshold**, typed into the rule editor in the lab's own units. Set creatinine to `> 1.5` and BUN to `> 25`, and the rule set finally tests what its citations actually claim. On the sample cohort that single change takes the same two-rule kidney pattern from **45% of admissions to 14.8%**.
-
-Two deliberate details:
-
-- **Severity still comes from the reference range.** How abnormal a value is clinically doesn't change because you chose a stricter threshold, so the Scoring Rule Book's bands still mean what they say.
-- **A rule that fires always scores at least 1 point**, so a threshold *looser* than the reference range can't match a patient and then contribute nothing.
-
-Leave the threshold empty and the rule means "outside the normal range", exactly as before.
-
-#### Scoring by a pattern
-
-The dashboard shipped with exactly one scoring model: [`score_admission()`](deterioration-detector/src/analysis/risk_score.py), which counts all 8 labs equally and answers *"how much of this patient's blood work looks wrong?"*. The **Score by** selector in the sidebar swaps in any pattern you've built, so the same dashboard answers a different question — *"how much does this patient look like this syndrome?"*.
-
-Choosing a pattern recomputes the risk score, the Low/Medium/High badge, the alerts, the risk trajectory **and the triage board's ranking** from that pattern's rules. Select "all 8 labs (built-in)" to switch back; the affected pages say which model produced the number so the two are never confused.
-
-The point maths is deliberately unchanged — the same 0/1/2 severity plus a worsening bonus, so the [Scoring Rule Book](#-scoring-rule-book) stays truthful. Only two things differ, both necessarily:
-
-1. **A lab moving the way the pattern doesn't care about scores nothing.** A rule for *White Blood Cells ↓ Low* is hunting leukopenia, so a *high* white count is not evidence for it. This also fixes a latent bug: `trend()` used to take its "which direction is bad" opinion solely from the lab dictionary, so a collapsing white count read as *improving* even for a rule that was looking for exactly that. A pattern's own direction now wins.
-2. **Low/Medium/High scale to the pattern's ceiling.** Each rule can contribute at most 3 points, so a 2-rule pattern maxes out at 6 and could never reach the built-in score's `6+ = High` band. High is the top third of what *that* pattern can produce.
-
-Because the trend bonus needs each lab's recent series rather than just its latest value, ranking the whole cohort by a pattern is precomputed and cached — automatically in the background whenever a pattern is saved, or on demand via `POST /api/builder/syndromes/{key}/rank`.
-
-Patterns are stored in the cloud database when `MOTHERDUCK_TOKEN` is set (so they survive a redeploy) and in a local JSON file otherwise; the tab tells you which. **Export** / **Import** move them between the two as a JSON file.
-
-> Requires `OPENAI_API_KEY` for step 2 only. Without it the tab still opens and says the co-pilot is unavailable — steps 1 and 3 work as normal.
+Open this address in your browser.
 
 ---
 
-## 📊 Current Project Status
+# ☁️ Data & Deployment
 
-✅ **Working prototype (Phase B), deployed**
+## Local Data
 
-- [x] Defined research question and project scope
-- [x] Identified dataset and key input fields
-- [x] Drafted system architecture and components
-- [x] Set up data access and ingestion pipeline (DuckDB streaming)
-- [x] Implement trend analysis & abnormality detection
-- [x] Implement risk scoring, trajectory & alert engine
-- [x] Add clinical syndrome detection
-- [x] Add lead-time analysis & detector evaluation vs MIMIC `FLAG`
-- [x] Add a cited scoring rule book (source-referenced, derived live from the engine)
-- [x] Build dashboard visualization (FastAPI + React)
-- [x] Testing & CI (pytest suite + GitHub Actions running the sample pipeline)
-- [x] Host the full dataset on MotherDuck (cloud DuckDB)
-- [x] Containerize (Docker) and deploy live on Render
+When running locally, DuckDB can be used to store and query the processed laboratory data.
 
----
+## MotherDuck
 
-## 🔜 Next Steps
+MotherDuck provides cloud-hosted DuckDB storage and can be used for the larger processed dataset.
 
-1. Tune risk thresholds and add ICU-specific reference ranges.
-2. Expand beyond the 8 core labs and add vitals where available.
-3. Explore a learned risk model behind the existing `score_admission()` interface.
-4. Add per-admission evaluation against outcomes and document findings.
+## Docker
+
+The project can be packaged using Docker so that the frontend and backend can be deployed together.
+
+## Render
+
+The deployed version of LabTrend is hosted using Render.
 
 ---
 
-## ⚠️ Disclaimer
+# 📖 User Manual
 
-**This project is an academic prototype developed for a Software Engineering course. It is NOT a medical device, clinical tool, or medical decision-support system.** It must **not** be used for real clinical decision-making, patient care, diagnosis, or treatment. The outputs are for educational and demonstration purposes only and have not been clinically validated or approved by any regulatory authority.
+A complete **LabTrend User Manual** is available separately.
+
+The manual includes:
+
+- System requirements
+- Installation instructions
+- Backend setup
+- Frontend setup
+- Instructions for running the system
+- Required inputs
+- Main user workflow
+- Description of system outputs
+- Explanation of the main features
+- Interface screenshots
+- Dashboard screenshots
+- Patient Monitoring
+- Early Warning
+- Detector Accuracy
+- Scoring Rule Book
+- Pattern Builder
+- Dataset Assistant
+
+### 📥 Download the User Manual
+
+**[Download LabTrend User Manual](https://drive.google.com/uc?export=download&id=1afWsu6GJUGGy7OMCGq5ov4ZuRHdxTqvh)**
 
 ---
 
-## 📄 License
+# 👥 Team
 
-To be determined.
+## Group 5 — Seminar Project 2026
+
+- **Mohammad Hajuj**
+- **Khalil Dabbah**
+- **Riad Bkheet**
+- **Salwa Khaldi**
+- **Naief Hajuj**
+- **Mohammad Majdoub**
+
+---
+
+# 🔗 Project Links
+
+### 🌐 Seminar Website
+
+[LabTrend Seminar Website](https://sites.google.com/view/2026group5labtrend)
+
+### 📖 User Manual
+
+[Download LabTrend User Manual](https://drive.google.com/uc?export=download&id=1afWsu6GJUGGy7OMCGq5ov4ZuRHdxTqvh)
+
+### 🚀 Live Application
+
+[Open LabTrend](https://deterioration-detector.onrender.com/)
+
+---
+
+# ⚠️ Disclaimer
+
+It is **not a medical device**, clinical diagnostic system, or approved clinical decision-support tool.
+
+The system has not been clinically validated or approved by a medical regulatory authority.
